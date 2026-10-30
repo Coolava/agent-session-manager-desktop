@@ -3,8 +3,10 @@
 from dataclasses import asdict
 from contextlib import closing
 import json
+import ntpath
 import os
 from pathlib import Path
+import posixpath
 import sqlite3
 import sys
 from uuid import UUID
@@ -34,6 +36,24 @@ def project_info(identifier, name, root):
     return {"id": identifier, "name": label, "root": root}
 
 
+def normalized_project_path(path):
+    path = path.removeprefix("\\\\?\\")
+    if ntpath.splitdrive(path)[0] and ntpath.isabs(path):
+        return ntpath.normcase(ntpath.normpath(path))
+    return posixpath.normpath(path) if path.startswith("/") else ""
+
+
+def project_for_path(cwd, roots):
+    path = normalized_project_path(cwd)
+    matches = [(root, project) for root, project in roots if root and
+               (path == root or path.startswith(root.rstrip("/\\") + ("\\" if ntpath.splitdrive(root)[0] else "/")))]
+    if not matches:
+        return None
+    longest = max(len(root) for root, _ in matches)
+    projects = {project["id"]: project for root, project in matches if len(root) == longest}
+    return next(iter(projects.values())) if len(projects) == 1 else None
+
+
 def codex_sessions(home=None):
     home = Path(home) if home is not None else codex_home()
     databases = sorted(home.glob("state_*.sqlite"), key=lambda p: int(p.stem.split("_")[-1]), reverse=True)
@@ -56,7 +76,7 @@ def codex_sessions(home=None):
         projectless_ids = set(identifiers)
     except ValueError as error:
         warnings.append("Codex 프로젝트 미지정 대화 분류를 읽지 못했습니다: " + str(error))
-    assignments, legacy_projects = {}, {}
+    assignments, legacy_projects, legacy_root_paths = {}, {}, []
     try:
         projects = state.get("local-projects", {})
         assignments = state.get("thread-project-assignments", {})
@@ -64,6 +84,9 @@ def codex_sessions(home=None):
             raise ValueError("지원하지 않는 Codex 프로젝트 배정 형식입니다.")
         legacy_projects = {key: project_info(key, value.get("name"), project_root(value.get("rootPaths")))
                            for key, value in projects.items() if isinstance(value, dict)}
+        for key, value in projects.items():
+            if legacy_projects.get(key):
+                legacy_root_paths.extend((key, project_root([path])) for path in value["rootPaths"])
     except ValueError as error:
         assignments = {}
         warnings.append("Codex 프로젝트 배정을 읽지 못했습니다: " + str(error))
@@ -83,16 +106,22 @@ def codex_sessions(home=None):
             raise ValueError("지원하지 않는 Codex 세션 데이터베이스 형식입니다.")
         name = "name" if "name" in columns else "NULL AS name"
         project_id = "project_id" if "project_id" in columns else "NULL AS project_id"
-        native_projects = {}
+        native_projects, native_root_paths = {}, []
         project_columns = {row[1] for row in connection.execute("PRAGMA table_info(projects)")}
         root_columns = {row[1] for row in connection.execute("PRAGMA table_info(project_roots)")}
         if {"id"} <= project_columns and {"project_id", "position", "path"} <= root_columns:
             try:
                 project_name = "p.name" if "name" in project_columns else "NULL AS name"
                 for row in connection.execute(f"SELECT p.id, {project_name}, r.path FROM projects p JOIN project_roots r ON r.project_id = p.id ORDER BY r.position"):
-                    native_projects.setdefault(row["id"], project_info(row["id"], row["name"], project_root([row["path"]])))
+                    root = project_root([row["path"]])
+                    native_projects.setdefault(row["id"], project_info(row["id"], row["name"], root))
+                    native_root_paths.append((row["id"], root))
             except sqlite3.Error as error:
                 warnings.append("Codex 프로젝트 루트를 읽지 못했습니다: " + str(error))
+        path_projects = [(native_projects[key], root) for key, root in native_root_paths if native_projects.get(key)]
+        path_projects.extend((legacy_projects[key], root) for key, root in legacy_root_paths
+                             if not native_projects.get(key) and not native_projects.get(aliases.get(key)))
+        path_projects = [(normalized_project_path(root), project) for project, root in path_projects]
         recency = "COALESCE(recency_at_ms, updated_at * 1000) AS recency_at_ms" if "recency_at_ms" in columns else "updated_at * 1000 AS recency_at_ms"
         visible = "archived = 0"
         if "thread_source" in columns:
@@ -108,6 +137,9 @@ def codex_sessions(home=None):
                 legacy_id = assignment["projectId"]
                 legacy_project = native_projects.get(aliases.get(legacy_id)) or legacy_projects.get(legacy_id)
             project = None if identifier in projectless_ids else native_projects.get(row["project_id"]) or legacy_project
+            has_assignment = bool(row["project_id"]) or (isinstance(assignment, dict) and isinstance(assignment.get("projectId"), str) and bool(assignment["projectId"]))
+            if not project and not has_assignment and identifier not in projectless_ids:
+                project = project_for_path(row["cwd"] or "", path_projects)
             sessions.append({"key": json.dumps(member, separators=(",", ":")), "member": member,
                              "provider": "codex", "id": identifier, "title": row["name"] or row["title"] or identifier,
                              "cwd": (row["cwd"] or "").removeprefix("\\\\?\\"), "environment": "local", "host": "local",
