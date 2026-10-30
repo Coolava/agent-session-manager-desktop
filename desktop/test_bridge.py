@@ -45,6 +45,7 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertEqual(sessions[0]["cwd"], r"D:\project")
         self.assertEqual(sessions[0]["lastActivity"], 123000)
         self.assertFalse(sessions[0]["projectless"])
+        self.assertFalse(sessions[0].get("codexProject"))
         self.assertEqual(warnings, [])
         self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before)
         self.assertFalse((self.home / ".codex-global-state.json").exists())
@@ -95,7 +96,7 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertEqual(list(self.home.iterdir()), [])
 
     def project_state(self):
-        return {"local-projects": {"local-project": {"rootPaths": [r"D:\project", "E:/second-root"]}},
+        return {"local-projects": {"local-project": {"name": "Project display name", "rootPaths": [r"D:\project", "E:/second-root"]}},
                 "thread-project-assignments": {self.identifier: {"projectKind": "local", "projectId": "local-project"}}}
 
     def test_codex_project_assignment_preserves_worktree_and_refreshes(self):
@@ -109,6 +110,7 @@ class DesktopBridgeTests(unittest.TestCase):
         before = hashlib.sha256(database.read_bytes()).hexdigest()
         sessions, warnings = bridge.codex_sessions(self.home)
         self.assertEqual(sessions[0]["projectCwd"], r"D:\project")
+        self.assertEqual(sessions[0].get("codexProject"), {"id": "local-project", "name": "Project display name"})
         self.assertEqual(sessions[0]["cwd"], r"F:\worktrees\abcd\project")
         self.assertEqual(warnings, [])
         self.assertEqual(state_path.read_text(encoding="utf-8"), contents)
@@ -128,6 +130,7 @@ class DesktopBridgeTests(unittest.TestCase):
         sessions, warnings = bridge.codex_sessions(self.home)
         self.assertTrue(sessions[0]["projectless"])
         self.assertFalse(sessions[0].get("projectCwd"))
+        self.assertFalse(sessions[0].get("codexProject"))
         self.assertEqual(warnings, [])
 
     def test_codex_missing_unknown_remote_and_invalid_projects_keep_cwd(self):
@@ -142,6 +145,7 @@ class DesktopBridgeTests(unittest.TestCase):
                 sessions, _ = bridge.codex_sessions(self.home)
                 self.assertEqual(sessions[0]["cwd"], r"D:\project")
                 self.assertFalse(sessions[0].get("projectCwd"))
+                self.assertFalse(sessions[0].get("codexProject"))
 
     def test_codex_invalid_project_containers_do_not_lose_projectless_or_sessions(self):
         self.database()
@@ -175,6 +179,7 @@ class DesktopBridgeTests(unittest.TestCase):
         state_path.write_text(json.dumps(self.project_state()), encoding="utf-8")
         before = hashlib.sha256(database.read_bytes()).hexdigest()
         self.assertEqual(bridge.codex_sessions(self.home)[0][0]["projectCwd"], r"D:\current")
+        self.assertEqual(bridge.codex_sessions(self.home)[0][0].get("codexProject"), {"id": "current-project", "name": "Current"})
         state_path.unlink()
         self.assertEqual(bridge.codex_sessions(self.home)[0][0]["projectCwd"], r"D:\current")
         state_path.write_text("broken JSON", encoding="utf-8")
@@ -188,6 +193,34 @@ class DesktopBridgeTests(unittest.TestCase):
             connection.execute("UPDATE threads SET project_id = 'deleted-project'")
         state_path.write_text(json.dumps(self.project_state()), encoding="utf-8")
         self.assertEqual(bridge.codex_sessions(self.home)[0][0]["projectCwd"], r"D:\project")
+
+    def test_codex_explicit_project_id_mapping_uses_only_current_home(self):
+        path = self.database()
+        with closing(sqlite3.connect(path)) as connection, connection:
+            connection.execute("CREATE TABLE projects(id TEXT, name TEXT)")
+            connection.execute("CREATE TABLE project_roots(project_id TEXT, position INTEGER, path TEXT)")
+            connection.execute("INSERT INTO projects VALUES('native-id','Renamed project')")
+            connection.execute("INSERT INTO project_roots VALUES('native-id',0,'D:/native')")
+        state = self.project_state()
+        state["app-server-project-id-by-legacy-project-id-by-host"] = {
+            "local:" + str(self.home): {"local-project": "native-id"},
+            "remote:other": {"local-project": "wrong-id"}}
+        state_path = self.home / ".codex-global-state.json"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        sessions, warnings = bridge.codex_sessions(self.home)
+        self.assertEqual(sessions[0].get("codexProject"), {"id": "native-id", "name": "Renamed project"})
+        self.assertEqual(sessions[0]["projectCwd"], "D:/native")
+        self.assertEqual(warnings, [])
+        del state["app-server-project-id-by-legacy-project-id-by-host"]["local:" + str(self.home)]
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        self.assertEqual(bridge.codex_sessions(self.home)[0][0].get("codexProject"), {"id": "local-project", "name": "Project display name"})
+
+    def test_codex_project_without_name_uses_root_folder_label(self):
+        self.database()
+        state = self.project_state()
+        del state["local-projects"]["local-project"]["name"]
+        (self.home / ".codex-global-state.json").write_text(json.dumps(state), encoding="utf-8")
+        self.assertEqual(bridge.codex_sessions(self.home)[0][0].get("codexProject"), {"id": "local-project", "name": "project"})
 
     def test_internal_subagents_and_guardian_reviews_are_not_desktop_chats(self):
         path = self.database()

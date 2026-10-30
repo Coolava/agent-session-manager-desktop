@@ -248,24 +248,25 @@ test('Claude scratch workspaces share this computer and retain search, refresh a
   expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([{ action: 'open', key: 'scratch-two' }]);
 });
 
-test('Codex project roots combine worktrees with Claude while retaining original paths and opening', async ({ page }) => {
+test('Codex projects combine assigned worktrees separately from folders and retain original paths and opening', async ({ page }) => {
   const common = { environment: 'local', host: 'local', lastActivity: 1793300000000 };
+  const codexProject = { id: 'project-1', name: 'Calibration workspace' };
   await setup(page, { extraSessions: [
     { ...common, key: 'root', member: ['claude', 'account', 'root'], provider: 'claude', id: 'root', title: 'Original project', cwd: 'D:/Projects/Calibration' },
-    { ...common, key: 'worktree-one', member: ['codex', 'local', 'worktree-one'], provider: 'codex', id: 'worktree-one', title: 'Worktree one', cwd: 'F:/worktrees/abcd/Calibration', projectCwd: 'd:\\Projects\\Calibration\\' },
-    { ...common, key: 'worktree-two', member: ['codex', 'local', 'worktree-two'], provider: 'codex', id: 'worktree-two', title: 'Worktree two', cwd: 'F:/worktrees/efgh/Calibration', projectCwd: 'D:/Projects/Calibration' },
+    { ...common, key: 'worktree-one', member: ['codex', 'local', 'worktree-one'], provider: 'codex', id: 'worktree-one', title: 'Worktree one', cwd: 'F:/worktrees/abcd/Calibration', projectCwd: 'd:\\Projects\\Calibration\\', codexProject },
+    { ...common, key: 'worktree-two', member: ['codex', 'local', 'worktree-two'], provider: 'codex', id: 'worktree-two', title: 'Worktree two', cwd: 'F:/worktrees/efgh/Calibration', projectCwd: 'D:/Projects/Calibration', codexProject },
     { ...common, key: 'other', member: ['codex', 'local', 'other'], provider: 'codex', id: 'other', title: 'Other project', cwd: 'E:/Other/Calibration' },
-    { ...common, key: 'projectless', member: ['codex', 'local', 'projectless'], provider: 'codex', id: 'projectless', title: 'Computer conversation', cwd: 'F:/worktrees/temp/Calibration', projectCwd: 'D:/Projects/Calibration', projectless: true },
-    { ...common, key: 'empty', member: ['codex', 'local', 'empty'], provider: 'codex', id: 'empty', title: 'Empty working path', cwd: '', projectCwd: 'D:/Projects/Calibration' },
+    { ...common, key: 'projectless', member: ['codex', 'local', 'projectless'], provider: 'codex', id: 'projectless', title: 'Computer conversation', cwd: 'F:/worktrees/temp/Calibration', projectCwd: 'D:/Projects/Calibration', projectless: true, codexProject },
+    { ...common, key: 'empty', member: ['codex', 'local', 'empty'], provider: 'codex', id: 'empty', title: 'Empty working path', cwd: '', projectCwd: 'D:/Projects/Calibration', codexProject },
   ] });
   await expect(page.locator('.path-row')).toHaveCount(5);
-  const rootProject = page.locator('.path-row[title*="Projects"]').filter({ hasText: 'Calibration' });
+  const rootProject = page.locator('.codex-project-row').filter({ hasText: 'Calibration workspace' });
   await expect(rootProject).toHaveCount(1);
   await rootProject.click();
-  await expect(page.locator('.session-row')).toHaveCount(4);
-  await expect(page.locator('.session-row')).toContainText(['Original project', 'Worktree one', 'Worktree two', 'Empty working path']);
-  await page.screenshot({ path: '../verification/desktop-codex-project-folders.png' });
-  await page.getByRole('textbox', { name: '세션 검색' }).fill('Projects Calibration Worktree');
+  await expect(page.locator('.session-row')).toHaveCount(3);
+  await expect(page.locator('.session-row')).toContainText(['Worktree one', 'Worktree two', 'Empty working path']);
+  await page.screenshot({ path: '../verification/desktop-codex-projects.png' });
+  await page.getByRole('textbox', { name: '세션 검색' }).fill('workspace Worktree');
   await page.getByRole('button', { name: '↻ 새로고침' }).click();
   await expect(rootProject).toHaveClass(/active/);
   await expect(page.locator('.session-row')).toHaveCount(2);
@@ -273,9 +274,35 @@ test('Codex project roots combine worktrees with Claude while retaining original
   await expect(page.locator('.session-row')).toHaveCount(1);
   await showDetails(page, page.locator('.session-row'));
   await expect(page.locator('dd').first()).toHaveText('F:/worktrees/abcd/Calibration');
+  await expect(page.locator('.detail-card')).toContainText('Calibration workspace');
   await page.getByRole('button', { name: /Codex Desktop에서 열기/ }).click();
   await expect(page.getByRole('status')).toContainText('세션 열기를 요청했습니다');
   expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([{ action: 'open', key: 'worktree-one' }]);
+});
+
+test('Codex projects with identical names and roots stay distinct by ID across rename and removal', async ({ page }) => {
+  const common = { provider: 'codex', environment: 'local', host: 'local', lastActivity: 1793300000000, projectCwd: 'D:/Shared' };
+  await setup(page, { extraSessions: [
+    { ...common, key: 'project-a', member: ['codex', 'local', 'project-a'], id: 'project-a', title: 'Task A', cwd: 'F:/worktrees/one', codexProject: { id: 'a', name: 'Shared' } },
+    { ...common, key: 'project-b', member: ['codex', 'local', 'project-b'], id: 'project-b', title: 'Task B', cwd: 'F:/worktrees/two', codexProject: { id: 'b', name: 'Shared' } },
+  ] });
+  await expect(page.locator('.codex-project-row')).toHaveCount(2);
+  await expect(page.locator('.path-row')).toHaveCount(2);
+  await page.locator('.codex-project-row').first().click();
+  await expect(page.locator('.session-row')).toHaveCount(1);
+  await expect(page.locator('.session-row')).toContainText('Task A');
+  await page.evaluate(() => { window.desktopSessions.find(s => s.key === 'project-a').codexProject.name = 'Renamed'; });
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(page.locator('.codex-project-row.active')).toHaveText('Renamed');
+  await expect(page.locator('.session-row')).toContainText('Task A');
+  await page.evaluate(() => { const session = window.desktopSessions.find(s => s.key === 'project-a'); delete session.codexProject; session.projectCwd = ''; });
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(page.locator('.codex-project-row')).toHaveCount(1);
+  await expect(page.locator('.path-row').filter({ hasText: 'one' })).toHaveCount(1);
+  await expect(page.locator('.session-row')).toHaveCount(4);
+  await page.locator('.codex-project-row').click();
+  await expect(page.locator('.session-row')).toHaveCount(1);
+  await expect(page.locator('.session-row')).toContainText('Task B');
 });
 
 test('Claude source groups stay separate from Codex projects, folders and other account groups', async ({ page }) => {
@@ -286,7 +313,7 @@ test('Claude source groups stay separate from Codex projects, folders and other 
     { ...common, key: 'other-account', member: ['claude', 'other:org', 'other-account'], id: 'other-account', title: 'Other account work', claudeGroup: { id: 'cg-1', name: 'Improve_Workflow' } },
     { ...common, key: 'other-group', member: ['claude', 'account:org', 'other-group'], id: 'other-group', title: 'Other group work', claudeGroup: { id: 'cg-2', name: 'Improve_Workflow' } },
     { ...common, key: 'scratch-group', member: ['claude', 'account:org', 'scratch-group'], id: 'scratch-group', title: 'Grouped scratch work', cwd: 'C:/Claude/scratch-workspaces/account/org/scratch-test', claudeGroup: { id: 'cg-1', name: 'Improve_Workflow' } },
-    { ...common, key: 'codex-same-name', member: ['codex', 'local', 'codex-same-name'], id: 'codex-same-name', provider: 'codex', title: 'Codex project work', cwd: 'F:/worktrees/one', projectCwd: 'D:/Improve_Workflow' },
+    { ...common, key: 'codex-same-name', member: ['codex', 'local', 'codex-same-name'], id: 'codex-same-name', provider: 'codex', title: 'Codex project work', cwd: 'F:/worktrees/one', projectCwd: 'D:/Improve_Workflow', codexProject: { id: 'codex-project', name: 'Improve_Workflow' } },
     { ...common, key: 'folder-same-name', member: ['claude', 'account:org', 'folder-same-name'], id: 'folder-same-name', title: 'Ordinary folder work', cwd: 'D:/Improve_Workflow' },
   ] });
   const sourceGroups = page.locator('.claude-group-row');
@@ -312,10 +339,13 @@ test('Claude source groups stay separate from Codex projects, folders and other 
   await expect(page.locator('.session-row')).toHaveCount(1);
   await expect(page.locator('.session-row')).toContainText('Other account work');
   await page.locator('.path-row').filter({ hasText: 'Improve_Workflow' }).click();
-  await expect(page.locator('.session-row')).toHaveCount(2);
-  await expect(page.locator('.session-row')).toContainText(['Codex project work', 'Ordinary folder work']);
+  await expect(page.locator('.session-row')).toHaveCount(1);
+  await expect(page.locator('.session-row')).toContainText('Ordinary folder work');
+  await page.locator('.codex-project-row').filter({ hasText: 'Improve_Workflow' }).click();
+  await expect(page.locator('.session-row')).toHaveCount(1);
+  await expect(page.locator('.session-row')).toContainText('Codex project work');
   await sourceGroups.first().click();
-  await page.screenshot({ path: '../verification/desktop-claude-source-groups.png' });
+  await page.screenshot({ path: '../verification/desktop-source-classification.png' });
   await page.evaluate(() => { window.desktopSessions.forEach(session => { if (session.provider === 'claude') delete session.claudeGroup; }); });
   await page.getByRole('button', { name: '↻ 새로고침' }).click();
   await expect(sourceGroups).toHaveCount(0);

@@ -27,6 +27,13 @@ def project_root(paths):
     return ""
 
 
+def project_info(identifier, name, root):
+    if not isinstance(identifier, str) or not identifier or not root:
+        return None
+    label = name if isinstance(name, str) and name.strip() else root.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    return {"id": identifier, "name": label, "root": root}
+
+
 def codex_sessions(home=None):
     home = Path(home) if home is not None else codex_home()
     databases = sorted(home.glob("state_*.sqlite"), key=lambda p: int(p.stem.split("_")[-1]), reverse=True)
@@ -49,16 +56,24 @@ def codex_sessions(home=None):
         projectless_ids = set(identifiers)
     except ValueError as error:
         warnings.append("Codex 프로젝트 미지정 대화 분류를 읽지 못했습니다: " + str(error))
-    assignments, legacy_roots = {}, {}
+    assignments, legacy_projects = {}, {}
     try:
         projects = state.get("local-projects", {})
         assignments = state.get("thread-project-assignments", {})
         if not isinstance(projects, dict) or not isinstance(assignments, dict):
             raise ValueError("지원하지 않는 Codex 프로젝트 배정 형식입니다.")
-        legacy_roots = {key: project_root(value.get("rootPaths")) for key, value in projects.items() if isinstance(value, dict)}
+        legacy_projects = {key: project_info(key, value.get("name"), project_root(value.get("rootPaths")))
+                           for key, value in projects.items() if isinstance(value, dict)}
     except ValueError as error:
         assignments = {}
         warnings.append("Codex 프로젝트 배정을 읽지 못했습니다: " + str(error))
+    aliases = {}
+    mappings = state.get("app-server-project-id-by-legacy-project-id-by-host", {})
+    if isinstance(mappings, dict):
+        for location in (str(home.resolve()), str(home)):
+            mapping = mappings.get("local:" + location)
+            if isinstance(mapping, dict):
+                aliases.update({key: value for key, value in mapping.items() if isinstance(value, str)})
     sessions = []
     with closing(sqlite3.connect(databases[0].resolve().as_uri() + "?mode=ro", uri=True, timeout=2)) as connection:
         connection.row_factory = sqlite3.Row
@@ -68,16 +83,16 @@ def codex_sessions(home=None):
             raise ValueError("지원하지 않는 Codex 세션 데이터베이스 형식입니다.")
         name = "name" if "name" in columns else "NULL AS name"
         project_id = "project_id" if "project_id" in columns else "NULL AS project_id"
-        roots = {}
-        if "project_id" in columns:
-            project_columns = {row[1] for row in connection.execute("PRAGMA table_info(projects)")}
-            root_columns = {row[1] for row in connection.execute("PRAGMA table_info(project_roots)")}
-            if {"id"} <= project_columns and {"project_id", "position", "path"} <= root_columns:
-                try:
-                    for row in connection.execute("SELECT p.id, r.path FROM projects p JOIN project_roots r ON r.project_id = p.id ORDER BY r.position"):
-                        roots.setdefault(row["id"], project_root([row["path"]]))
-                except sqlite3.Error as error:
-                    warnings.append("Codex 프로젝트 루트를 읽지 못했습니다: " + str(error))
+        native_projects = {}
+        project_columns = {row[1] for row in connection.execute("PRAGMA table_info(projects)")}
+        root_columns = {row[1] for row in connection.execute("PRAGMA table_info(project_roots)")}
+        if {"id"} <= project_columns and {"project_id", "position", "path"} <= root_columns:
+            try:
+                project_name = "p.name" if "name" in project_columns else "NULL AS name"
+                for row in connection.execute(f"SELECT p.id, {project_name}, r.path FROM projects p JOIN project_roots r ON r.project_id = p.id ORDER BY r.position"):
+                    native_projects.setdefault(row["id"], project_info(row["id"], row["name"], project_root([row["path"]])))
+            except sqlite3.Error as error:
+                warnings.append("Codex 프로젝트 루트를 읽지 못했습니다: " + str(error))
         recency = "COALESCE(recency_at_ms, updated_at * 1000) AS recency_at_ms" if "recency_at_ms" in columns else "updated_at * 1000 AS recency_at_ms"
         visible = "archived = 0"
         if "thread_source" in columns:
@@ -88,15 +103,17 @@ def codex_sessions(home=None):
             identifier = str(UUID(row["id"]))
             member = ["codex", "local", identifier]
             assignment = assignments.get(identifier)
-            legacy_root = ""
+            legacy_project = None
             if isinstance(assignment, dict) and assignment.get("projectKind") == "local" and isinstance(assignment.get("projectId"), str):
-                legacy_root = legacy_roots.get(assignment["projectId"], "")
-            project_cwd = "" if identifier in projectless_ids else roots.get(row["project_id"], "") or legacy_root
+                legacy_id = assignment["projectId"]
+                legacy_project = native_projects.get(aliases.get(legacy_id)) or legacy_projects.get(legacy_id)
+            project = None if identifier in projectless_ids else native_projects.get(row["project_id"]) or legacy_project
             sessions.append({"key": json.dumps(member, separators=(",", ":")), "member": member,
                              "provider": "codex", "id": identifier, "title": row["name"] or row["title"] or identifier,
                              "cwd": (row["cwd"] or "").removeprefix("\\\\?\\"), "environment": "local", "host": "local",
                              "projectless": identifier in projectless_ids,
-                             "projectCwd": project_cwd,
+                             "projectCwd": project["root"] if project else "",
+                             "codexProject": {key: project[key] for key in ("id", "name")} if project else None,
                              "lastActivity": row["recency_at_ms"] or 0})
     return sessions, warnings
 

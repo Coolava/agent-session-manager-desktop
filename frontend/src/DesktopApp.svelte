@@ -127,9 +127,10 @@
 
   function contains(group: Group, session: Session) { return group.members.some(member => JSON.stringify(member) === JSON.stringify(session.member)); }
   function sourceGroup(session: Session) { return session.provider === 'claude' ? session.claudeGroup : undefined; }
+  function sourceProject(session: Session) { return session.provider === 'codex' && session.environment === 'local' && !session.projectless ? session.codexProject : undefined; }
   function classificationSession(session: Session, tree: ReturnType<typeof buildSessionTree>) {
     let node = tree.byKey.get(session.key)!;
-    while (node.parent && !sourceGroup(node.session)) node = node.parent;
+    while (node.parent && !sourceGroup(node.session) && !sourceProject(node.session)) node = node.parent;
     return node.session;
   }
   function isComputerWorkspace(session: Session) {
@@ -142,6 +143,8 @@
   function projectKey(session: Session) {
     const group = sourceGroup(session);
     if (group) return JSON.stringify(['claude-group', session.member[1], group.id]);
+    const project = sourceProject(session);
+    if (project) return JSON.stringify(['codex-project', session.environment, session.host, session.member[1], project.id]);
     const path = projectPath(session);
     const key = session.environment === 'local' && /^[a-z]:[\\/]/i.test(path) ? path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() : path;
     return JSON.stringify(isComputerWorkspace(session) ? ['computer', session.environment, session.host] : [session.environment, session.host, key]);
@@ -158,11 +161,13 @@
   $: tree = buildSessionTree(sessions);
   $: selected = sessions.find(s => s.key === selectedKey);
   $: selectedSourceGroup = selected && sourceGroup(classificationSession(selected, tree));
+  $: selectedSourceProject = selected && sourceProject(classificationSession(selected, tree));
   $: selectedNode = tree.byKey.get(selectedKey);
   $: selectedGroup = groups.find(g => `group:${g.id}` === scope);
   $: classifications = [...new Map(sessions.map(s => classificationSession(s, tree)).map(s => [projectKey(s), s])).values()];
   $: sourceGroups = classifications.filter(s => sourceGroup(s)).sort((a, b) => sourceGroup(a)!.name.localeCompare(sourceGroup(b)!.name));
-  $: paths = classifications.filter(s => !sourceGroup(s) && (projectPath(s) || isComputerWorkspace(s))).sort((a, b) => projectPath(a).localeCompare(projectPath(b)));
+  $: codexProjects = classifications.filter(s => sourceProject(s)).sort((a, b) => sourceProject(a)!.name.localeCompare(sourceProject(b)!.name));
+  $: paths = classifications.filter(s => !sourceGroup(s) && !sourceProject(s) && (projectPath(s) || isComputerWorkspace(s))).sort((a, b) => projectPath(a).localeCompare(projectPath(b)));
   $: if (scope.startsWith('path:') && !classifications.some(s => `path:${projectKey(s)}` === scope)) scope = 'all';
   $: scopedKeys = new Set(sessions.filter(session => {
     if (scope === 'claude' || scope === 'codex') { if (session.provider !== scope) return false; }
@@ -227,6 +232,14 @@
           {/each}
         </details>
       {/if}
+      {#if codexProjects.length}
+        <details class="codex-projects" open>
+          <summary class="sidebar-label spaced">CODEX PROJECTS <span>{codexProjects.length}</span></summary>
+          {#each codexProjects as project (projectKey(project))}
+            <button class="nav-row codex-project-row" class:active={scope === `path:${projectKey(project)}`} title={`Codex 프로젝트 · ${sourceProject(project)!.name} · ${projectPath(project)}`} on:click={() => { scope = `path:${projectKey(project)}`; selectedKey = ''; }}><AgentIcon agent="codex" size="sm" /><span>{sourceProject(project)!.name}</span></button>
+          {/each}
+        </details>
+      {/if}
       <details class="projects" open>
         <summary class="sidebar-label spaced">PROJECT FOLDERS <span>{paths.length}</span></summary>
         {#each paths as project}
@@ -269,7 +282,7 @@
           {:else if selectedNode?.parentUnavailable}
             <div class="parent-link">부모 대화 확인 불가</div>
           {/if}
-          <dl><dt>작업 폴더</dt><dd>{selected.cwd || '기록 없음'}</dd><dt>환경</dt><dd>{selected.environment === 'ssh' ? `SSH · ${selected.host}` : '로컬'}</dd><dt>최근 활동</dt><dd>{date(selected.lastActivity)}</dd><dt>세션 ID</dt><dd class="mono">{selected.id}</dd>{#if selectedSourceGroup}<dt>Claude 그룹</dt><dd>{selectedSourceGroup.name}</dd>{/if}<dt>상태 근거</dt><dd>{state.detail}</dd></dl>
+          <dl><dt>작업 폴더</dt><dd>{selected.cwd || '기록 없음'}</dd><dt>환경</dt><dd>{selected.environment === 'ssh' ? `SSH · ${selected.host}` : '로컬'}</dd><dt>최근 활동</dt><dd>{date(selected.lastActivity)}</dd><dt>세션 ID</dt><dd class="mono">{selected.id}</dd>{#if selectedSourceGroup}<dt>Claude 그룹</dt><dd>{selectedSourceGroup.name}</dd>{/if}{#if selectedSourceProject}<dt>Codex 프로젝트</dt><dd>{selectedSourceProject.name}</dd>{/if}<dt>상태 근거</dt><dd>{state.detail}</dd></dl>
           <button class="primary open-button" on:click={() => openSession(selected)} disabled={opening}>{opening ? '세션을 여는 중…' : `${selected.provider === 'codex' ? 'Codex' : 'Claude'} Desktop에서 열기`} <span>↗</span></button>
           <div class="group-assignment"><label for="target-group">그룹</label><select id="target-group" bind:value={targetGroup} disabled={!!groupError || groups.length === 0}><option value="" disabled>그룹 선택</option>{#each groups as group}<option value={group.id}>{group.name}</option>{/each}</select><button disabled={!targetGroup || groupBusy || !!groupError} on:click={() => groupAction('add-member', { id: targetGroup, key: selected.key })}>그룹에 추가</button></div>
           <div class="membership">{#each groups.filter(g => contains(g, selected)) as group}<button title="이 그룹에서 제외" disabled={groupBusy || !!groupError} on:click={() => groupAction('remove-member', { id: group.id, key: selected.key })}>{group.name} ×</button>{/each}</div>
