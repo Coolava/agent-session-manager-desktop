@@ -106,7 +106,6 @@
     const text = [session.title, session.cwd, session.host, session.id, session.provider, session.environment].join(' ').toLowerCase();
     return query.toLowerCase().split(/\s+/).filter(Boolean).every(word => text.includes(word));
   });
-  $: scopeTitle = selectedGroup?.name ?? (scope === 'all' ? '전체 세션' : scope === 'claude' ? 'Claude Desktop' : scope === 'codex' ? 'Codex Desktop' : folder(paths.find(s => `path:${projectKey(s)}` === scope)?.cwd ?? '프로젝트'));
 
   onMount(() => {
     void refresh();
@@ -121,6 +120,7 @@
     <div class="brand"><img src={logo} alt="Agent Session Manager" /><div><strong>Agent Session Manager</strong><span>DESKTOP SESSIONS</span></div></div>
     <div class="header-tools" style="--wails-draggable:no-drag">
       <label class="search"><span>⌕</span><input aria-label="세션 검색" bind:value={query} placeholder="세션, 폴더, 호스트 검색…" /></label>
+      <label class="auto-refresh"><input type="checkbox" bind:checked={autoRefresh} /> 자동 갱신 · 5초</label>
       <button class="refresh" on:click={refresh} disabled={loading}>{loading ? '조회 중…' : '↻ 새로고침'}</button>
       <button class="window-button" aria-label="최소화" on:click={WindowMinimise}>—</button>
       <button class="window-button" aria-label="최대화" on:click={WindowToggleMaximise}>□</button>
@@ -155,7 +155,6 @@
     </aside>
 
     <main>
-      <div class="main-heading"><h1>{scopeTitle}</h1><label class="auto-refresh"><input type="checkbox" bind:checked={autoRefresh} /> 자동 갱신 · 5초</label></div>
       {#if error}<div role="alert" class="banner error">{error}</div>{/if}
       {#if refreshError}<div role="alert" class="banner error">{refreshError}</div>{/if}
       {#each Object.values(activityErrors).filter(Boolean) as activityError}<div role="alert" class="banner error">{activityError}</div>{/each}
@@ -223,7 +222,7 @@
   .nav-row { display:flex; align-items:center; gap:11px; width:100%; padding:11px 12px; text-align:left; border:1px solid transparent; border-radius:8px; background:none; margin-bottom:3px; } .nav-row:hover { background:#ffffff05; } .nav-row.active { background:rgba(var(--accent-rgb),.12); color:var(--accent-lighter); border-color:rgba(var(--accent-rgb),.22); } .nav-row > span:nth-child(2) { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .nav-row small { color:#71717a; font-size:11px; } .grid-icon,.folder-icon { width:16px; color:var(--accent-light); font-size:17px; } .path-row { color:#a1a1aa; padding-top:8px; padding-bottom:8px; font-size:12px; }
   .new-group { display:flex; margin:8px 8px 0; gap:4px; } .new-group input { width:100%; border:1px solid #ffffff10; border-radius:6px; background:var(--bg-sunken); padding:8px; font-size:11px; } .new-group button { background:rgba(var(--accent-rgb),.12); border:0; border-radius:6px; color:var(--accent-light); width:30px; flex-shrink:0; } .projects { margin-bottom:24px; } summary { cursor:pointer; } .sidebar-footer { margin-top:auto; padding:16px 10px 4px; border-top:1px solid #ffffff0a; color:#71717a; font-size:10px; display:flex; align-items:center; gap:7px; } .connection-dot { width:5px; height:5px; border-radius:50%; background:#34d399; }
   .group-tools { display:flex; gap:8px; margin-bottom:18px; } .group-tools input { background:var(--bg-raised); border:1px solid #ffffff18; padding:8px 12px; border-radius:7px; } .group-tools button,.warning button { background:#ffffff06; border:1px solid #ffffff18; padding:8px 12px; border-radius:7px; } .warning button { margin:8px 0 0 8px; }
-  main { flex:1; min-width:0; overflow-y:auto; padding:32px 34px 16px; } .main-heading { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-bottom:28px; } h1 { font-size:25px; font-weight:650; letter-spacing:-.5px; margin:0; } .auto-refresh { display:flex; align-items:center; gap:8px; color:#a1a1aa; font-size:11px; white-space:nowrap; } input[type=checkbox] { accent-color:var(--accent); }
+  main { flex:1; min-width:0; overflow-y:auto; padding:32px 34px 16px; } .auto-refresh { display:flex; align-items:center; gap:8px; color:#a1a1aa; font-size:11px; white-space:nowrap; } input[type=checkbox] { accent-color:var(--accent); }
   .session-panel { border:1px solid #ffffff0c; border-radius:12px; overflow:hidden; background:rgba(var(--bg-base-rgb),.42); } .panel-heading { display:flex; justify-content:space-between; align-items:center; padding:18px 20px; border-bottom:1px solid #ffffff0a; } .panel-heading h2 { font-size:13px; font-weight:600; } .panel-heading > span { font-size:10px; color:#71717a; }
   .table-heading,.session-row { display:grid; grid-template-columns:minmax(210px,1.5fr) minmax(130px,1fr) 85px 115px; gap:18px; align-items:center; } .table-heading { padding:12px 20px; color:#52525b; font-size:10px; background:#ffffff02; } .session-row { width:100%; background:none; border:0; border-top:1px solid #ffffff06; text-align:left; padding:16px 20px; } .session-row:hover { background:rgba(var(--accent-rgb),.07); } .session-title { min-width:0; display:flex; align-items:center; gap:12px; } .session-title > span { min-width:0; } .session-title strong { display:block; font-size:12px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .session-title small,.session-path small { display:block; color:#52525b; font-size:10px; margin-top:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .session-path { min-width:0; color:#a1a1aa; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } time { font-size:10px; color:#71717a; }
   .badge { display:inline-flex; justify-content:center; width:fit-content; gap:5px; font-size:10px; padding:4px 8px; border-radius:5px; background:#ffffff06; color:#71717a; white-space:nowrap; } .badge.working { background:#8b5cf61a; color:#c4b5fd; } .badge.completed { background:#10b98118; color:#34d399; } .badge.interrupted { background:#f59e0b18; color:#fbbf24; } .badge.idle { color:#a1a1aa; } .badge.error,.badge.refused { color:#fca5a5; background:#ef444418; }

@@ -65,7 +65,7 @@ test('groups retain memberships across snapshot refresh', async ({ page }) => {
   await expect(page.locator('.session-row')).toContainText('Workflow validation');
   await page.getByRole('textbox', { name: '그룹 이름 변경' }).fill('Release ready');
   await page.getByRole('button', { name: '이름 변경', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Release ready' })).toBeVisible();
+  await expect(page.locator('aside .nav-row.active')).toContainText('Release ready');
   await page.getByRole('button', { name: '그룹 삭제', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('대화는 보존됩니다');
   await page.getByRole('button', { name: '삭제 확인' }).click();
