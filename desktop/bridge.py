@@ -20,24 +20,44 @@ def codex_home():
     return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
 
 
+def project_root(paths):
+    if isinstance(paths, list) and paths and isinstance(paths[0], str) and paths[0].strip():
+        return paths[0].removeprefix("\\\\?\\")
+    return ""
+
+
 def codex_sessions(home=None):
     home = Path(home) if home is not None else codex_home()
     databases = sorted(home.glob("state_*.sqlite"), key=lambda p: int(p.stem.split("_")[-1]), reverse=True)
     if not databases:
         return [], ["Codex의 로컬 세션 데이터베이스를 찾지 못했습니다."]
-    projectless_ids, warnings = set(), []
+    state, projectless_ids, warnings = {}, set(), []
     try:
         state = json.loads((home / ".codex-global-state.json").read_text(encoding="utf-8"))
         if not isinstance(state, dict):
             raise ValueError("지원하지 않는 Codex 전역 상태 형식입니다.")
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError) as error:
+        state = {}
+        warnings.append("Codex 프로젝트 분류를 읽지 못했습니다: " + str(error))
+    try:
         identifiers = state.get("projectless-thread-ids", [])
         if not isinstance(identifiers, list) or any(not isinstance(value, str) for value in identifiers):
             raise ValueError("지원하지 않는 Codex 프로젝트 미지정 목록 형식입니다.")
         projectless_ids = set(identifiers)
-    except FileNotFoundError:
-        pass
-    except (OSError, ValueError) as error:
+    except ValueError as error:
         warnings.append("Codex 프로젝트 미지정 대화 분류를 읽지 못했습니다: " + str(error))
+    assignments, legacy_roots = {}, {}
+    try:
+        projects = state.get("local-projects", {})
+        assignments = state.get("thread-project-assignments", {})
+        if not isinstance(projects, dict) or not isinstance(assignments, dict):
+            raise ValueError("지원하지 않는 Codex 프로젝트 배정 형식입니다.")
+        legacy_roots = {key: project_root(value.get("rootPaths")) for key, value in projects.items() if isinstance(value, dict)}
+    except ValueError as error:
+        assignments = {}
+        warnings.append("Codex 프로젝트 배정을 읽지 못했습니다: " + str(error))
     sessions = []
     with closing(sqlite3.connect(databases[0].resolve().as_uri() + "?mode=ro", uri=True, timeout=2)) as connection:
         connection.row_factory = sqlite3.Row
@@ -46,19 +66,36 @@ def codex_sessions(home=None):
         if not required <= columns:
             raise ValueError("지원하지 않는 Codex 세션 데이터베이스 형식입니다.")
         name = "name" if "name" in columns else "NULL AS name"
+        project_id = "project_id" if "project_id" in columns else "NULL AS project_id"
+        roots = {}
+        if "project_id" in columns:
+            project_columns = {row[1] for row in connection.execute("PRAGMA table_info(projects)")}
+            root_columns = {row[1] for row in connection.execute("PRAGMA table_info(project_roots)")}
+            if {"id"} <= project_columns and {"project_id", "position", "path"} <= root_columns:
+                try:
+                    for row in connection.execute("SELECT p.id, r.path FROM projects p JOIN project_roots r ON r.project_id = p.id ORDER BY r.position"):
+                        roots.setdefault(row["id"], project_root([row["path"]]))
+                except sqlite3.Error as error:
+                    warnings.append("Codex 프로젝트 루트를 읽지 못했습니다: " + str(error))
         recency = "COALESCE(recency_at_ms, updated_at * 1000) AS recency_at_ms" if "recency_at_ms" in columns else "updated_at * 1000 AS recency_at_ms"
         visible = "archived = 0"
         if "thread_source" in columns:
             visible += " AND (thread_source IS NULL OR thread_source NOT IN ('subagent', 'guardian_review'))"
         if "source" in columns:
             visible += " AND source NOT LIKE '%subagent%'"
-        for row in connection.execute(f"SELECT id, title, {name}, cwd, {recency} FROM threads WHERE {visible}"):
+        for row in connection.execute(f"SELECT id, title, {name}, cwd, {project_id}, {recency} FROM threads WHERE {visible}"):
             identifier = str(UUID(row["id"]))
             member = ["codex", "local", identifier]
+            assignment = assignments.get(identifier)
+            legacy_root = ""
+            if isinstance(assignment, dict) and assignment.get("projectKind") == "local" and isinstance(assignment.get("projectId"), str):
+                legacy_root = legacy_roots.get(assignment["projectId"], "")
+            project_cwd = "" if identifier in projectless_ids else roots.get(row["project_id"], "") or legacy_root
             sessions.append({"key": json.dumps(member, separators=(",", ":")), "member": member,
                              "provider": "codex", "id": identifier, "title": row["name"] or row["title"] or identifier,
                              "cwd": (row["cwd"] or "").removeprefix("\\\\?\\"), "environment": "local", "host": "local",
                              "projectless": identifier in projectless_ids,
+                             "projectCwd": project_cwd,
                              "lastActivity": row["recency_at_ms"] or 0})
     return sessions, warnings
 

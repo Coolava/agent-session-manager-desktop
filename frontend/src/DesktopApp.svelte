@@ -132,8 +132,13 @@
     return session.provider === 'claude'
       && /(?:^|[\\/])scratch-workspaces[\\/][^\\/]+[\\/][^\\/]+[\\/]scratch-[^\\/]+[\\/]?$/i.test(session.cwd);
   }
-  function projectKey(session: Session) { return JSON.stringify(isComputerWorkspace(session) ? ['computer', session.environment, session.host] : [session.environment, session.host, session.cwd]); }
-  function projectLabel(session: Session) { return isComputerWorkspace(session) ? '이 컴퓨터' : folder(session.cwd) + (session.environment === 'ssh' ? ` · ${session.host}` : ''); }
+  function projectPath(session: Session) { return session.provider === 'codex' && session.environment === 'local' ? session.projectCwd || session.cwd : session.cwd; }
+  function projectKey(session: Session) {
+    const path = projectPath(session);
+    const key = session.environment === 'local' && /^[a-z]:[\\/]/i.test(path) ? path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() : path;
+    return JSON.stringify(isComputerWorkspace(session) ? ['computer', session.environment, session.host] : [session.environment, session.host, key]);
+  }
+  function projectLabel(session: Session) { return isComputerWorkspace(session) ? '이 컴퓨터' : folder(projectPath(session)) + (session.environment === 'ssh' ? ` · ${session.host}` : ''); }
   function folder(path: string) { return path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path || '작업 폴더 없음'; }
   function date(value: number) { return value ? new Date(value).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '기록 없음'; }
   function toggleChildren(key: string, automatic: boolean) {
@@ -146,7 +151,7 @@
   $: selected = sessions.find(s => s.key === selectedKey);
   $: selectedNode = tree.byKey.get(selectedKey);
   $: selectedGroup = groups.find(g => `group:${g.id}` === scope);
-  $: paths = [...new Map(tree.roots.map(node => node.session).filter(s => s.cwd || isComputerWorkspace(s)).map(s => [projectKey(s), s])).values()].sort((a, b) => a.cwd.localeCompare(b.cwd));
+  $: paths = [...new Map(tree.roots.map(node => node.session).filter(s => projectPath(s) || isComputerWorkspace(s)).map(s => [projectKey(s), s])).values()].sort((a, b) => projectPath(a).localeCompare(projectPath(b)));
   $: scopedKeys = new Set(sessions.filter(session => {
     if (scope === 'claude' || scope === 'codex') { if (session.provider !== scope) return false; }
     if (scope.startsWith('path:') && projectKey(sessionRoot(tree.byKey.get(session.key)!)) !== scope.slice(5)) return false;
@@ -205,7 +210,7 @@
       <details class="projects" open>
         <summary class="sidebar-label spaced">PROJECT FOLDERS <span>{paths.length}</span></summary>
         {#each paths as project}
-          <button class="nav-row path-row" class:active={scope === `path:${projectKey(project)}`} title={isComputerWorkspace(project) ? '이 컴퓨터 · 프로젝트 미지정 대화' : `${project.host} · ${project.cwd}`} on:click={() => { scope = `path:${projectKey(project)}`; selectedKey = ''; }}><span class="folder-icon">▱</span><span>{projectLabel(project)}</span></button>
+          <button class="nav-row path-row" class:active={scope === `path:${projectKey(project)}`} title={isComputerWorkspace(project) ? '이 컴퓨터 · 프로젝트 미지정 대화' : `${project.host} · ${projectPath(project)}`} on:click={() => { scope = `path:${projectKey(project)}`; selectedKey = ''; }}><span class="folder-icon">▱</span><span>{projectLabel(project)}</span></button>
         {/each}
       </details>
       <div class="sidebar-footer"><span class="connection-dot"></span> Local desktop connections</div>

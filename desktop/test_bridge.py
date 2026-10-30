@@ -91,6 +91,101 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertTrue(warnings)
         self.assertEqual(list(self.home.iterdir()), [])
 
+    def project_state(self):
+        return {"local-projects": {"local-project": {"rootPaths": [r"D:\project", "E:/second-root"]}},
+                "thread-project-assignments": {self.identifier: {"projectKind": "local", "projectId": "local-project"}}}
+
+    def test_codex_project_assignment_preserves_worktree_and_refreshes(self):
+        database = self.database()
+        with closing(sqlite3.connect(database)) as connection, connection:
+            connection.execute("UPDATE threads SET cwd = ?", (r"F:\worktrees\abcd\project",))
+        state = self.project_state()
+        state_path = self.home / ".codex-global-state.json"
+        contents = json.dumps(state)
+        state_path.write_text(contents, encoding="utf-8")
+        before = hashlib.sha256(database.read_bytes()).hexdigest()
+        sessions, warnings = bridge.codex_sessions(self.home)
+        self.assertEqual(sessions[0]["projectCwd"], r"D:\project")
+        self.assertEqual(sessions[0]["cwd"], r"F:\worktrees\abcd\project")
+        self.assertEqual(warnings, [])
+        self.assertEqual(state_path.read_text(encoding="utf-8"), contents)
+        self.assertEqual(hashlib.sha256(database.read_bytes()).hexdigest(), before)
+        state["local-projects"]["local-project"]["rootPaths"] = ["D:/moved"]
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        self.assertEqual(bridge.codex_sessions(self.home)[0][0]["projectCwd"], "D:/moved")
+        with patch.object(bridge, "codex_home", return_value=self.home), patch.object(bridge.os, "startfile", create=True) as start:
+            bridge.dispatch({"action": "open", "key": sessions[0]["key"]}, self.manager())
+        start.assert_called_once_with("codex://threads/" + self.identifier)
+
+    def test_codex_projectless_wins_over_project_assignment(self):
+        self.database()
+        state = self.project_state()
+        state["projectless-thread-ids"] = [self.identifier]
+        (self.home / ".codex-global-state.json").write_text(json.dumps(state), encoding="utf-8")
+        sessions, warnings = bridge.codex_sessions(self.home)
+        self.assertTrue(sessions[0]["projectless"])
+        self.assertFalse(sessions[0].get("projectCwd"))
+        self.assertEqual(warnings, [])
+
+    def test_codex_missing_unknown_remote_and_invalid_projects_keep_cwd(self):
+        self.database()
+        for patch_state in ({}, {"local-projects": {}}, {"local-projects": {"local-project": {"rootPaths": []}}},
+                            {"local-projects": {"local-project": {"rootPaths": [123]}}},
+                            {"thread-project-assignments": {self.identifier: {"projectKind": "remote", "projectId": "local-project"}}},
+                            {"thread-project-assignments": {self.identifier: None}}):
+            state = {**self.project_state(), **patch_state} if patch_state else {}
+            with self.subTest(state=state):
+                (self.home / ".codex-global-state.json").write_text(json.dumps(state), encoding="utf-8")
+                sessions, _ = bridge.codex_sessions(self.home)
+                self.assertEqual(sessions[0]["cwd"], r"D:\project")
+                self.assertFalse(sessions[0].get("projectCwd"))
+
+    def test_codex_invalid_project_containers_do_not_lose_projectless_or_sessions(self):
+        self.database()
+        for key in ("local-projects", "thread-project-assignments"):
+            state = {**self.project_state(), key: [], "projectless-thread-ids": [self.identifier]}
+            (self.home / ".codex-global-state.json").write_text(json.dumps(state), encoding="utf-8")
+            sessions, warnings = bridge.codex_sessions(self.home)
+            self.assertEqual(len(sessions), 1)
+            self.assertTrue(sessions[0]["projectless"])
+            self.assertTrue(warnings)
+
+    def test_codex_invalid_projectless_list_does_not_lose_valid_project_assignment(self):
+        self.database()
+        state = {**self.project_state(), "projectless-thread-ids": {}}
+        (self.home / ".codex-global-state.json").write_text(json.dumps(state), encoding="utf-8")
+        sessions, warnings = bridge.codex_sessions(self.home)
+        self.assertEqual(sessions[0]["projectCwd"], r"D:\project")
+        self.assertFalse(sessions[0]["projectless"])
+        self.assertTrue(warnings)
+
+    def test_codex_sqlite_projects_precede_legacy_assignments_and_use_first_root(self):
+        database = self.database()
+        with closing(sqlite3.connect(database)) as connection, connection:
+            connection.execute("ALTER TABLE threads ADD COLUMN project_id TEXT")
+            connection.execute("UPDATE threads SET project_id = 'current-project'")
+            connection.execute("CREATE TABLE projects(id TEXT PRIMARY KEY, name TEXT)")
+            connection.execute("INSERT INTO projects VALUES('current-project', 'Current')")
+            connection.execute("CREATE TABLE project_roots(project_id TEXT, position INTEGER, path TEXT)")
+            connection.executemany("INSERT INTO project_roots VALUES('current-project',?,?)", [(1, "E:/second"), (0, r"\\?\D:\current")])
+        state_path = self.home / ".codex-global-state.json"
+        state_path.write_text(json.dumps(self.project_state()), encoding="utf-8")
+        before = hashlib.sha256(database.read_bytes()).hexdigest()
+        self.assertEqual(bridge.codex_sessions(self.home)[0][0]["projectCwd"], r"D:\current")
+        state_path.unlink()
+        self.assertEqual(bridge.codex_sessions(self.home)[0][0]["projectCwd"], r"D:\current")
+        state_path.write_text("broken JSON", encoding="utf-8")
+        sessions, warnings = bridge.codex_sessions(self.home)
+        self.assertEqual(sessions[0]["projectCwd"], r"D:\current")
+        self.assertTrue(warnings)
+        state_path.write_text(json.dumps({**self.project_state(), "projectless-thread-ids": [self.identifier]}), encoding="utf-8")
+        self.assertFalse(bridge.codex_sessions(self.home)[0][0]["projectCwd"])
+        self.assertEqual(hashlib.sha256(database.read_bytes()).hexdigest(), before)
+        with closing(sqlite3.connect(database)) as connection, connection:
+            connection.execute("UPDATE threads SET project_id = 'deleted-project'")
+        state_path.write_text(json.dumps(self.project_state()), encoding="utf-8")
+        self.assertEqual(bridge.codex_sessions(self.home)[0][0]["projectCwd"], r"D:\project")
+
     def test_internal_subagents_and_guardian_reviews_are_not_desktop_chats(self):
         path = self.database()
         with closing(sqlite3.connect(path)) as connection, connection:

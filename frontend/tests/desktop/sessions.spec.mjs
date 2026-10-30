@@ -247,6 +247,36 @@ test('Claude scratch workspaces share this computer and retain search, refresh a
   expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([{ action: 'open', key: 'scratch-two' }]);
 });
 
+test('Codex project roots combine worktrees with Claude while retaining original paths and opening', async ({ page }) => {
+  const common = { environment: 'local', host: 'local', lastActivity: 1793300000000 };
+  await setup(page, { extraSessions: [
+    { ...common, key: 'root', member: ['claude', 'account', 'root'], provider: 'claude', id: 'root', title: 'Original project', cwd: 'D:/Projects/Calibration' },
+    { ...common, key: 'worktree-one', member: ['codex', 'local', 'worktree-one'], provider: 'codex', id: 'worktree-one', title: 'Worktree one', cwd: 'F:/worktrees/abcd/Calibration', projectCwd: 'd:\\Projects\\Calibration\\' },
+    { ...common, key: 'worktree-two', member: ['codex', 'local', 'worktree-two'], provider: 'codex', id: 'worktree-two', title: 'Worktree two', cwd: 'F:/worktrees/efgh/Calibration', projectCwd: 'D:/Projects/Calibration' },
+    { ...common, key: 'other', member: ['codex', 'local', 'other'], provider: 'codex', id: 'other', title: 'Other project', cwd: 'E:/Other/Calibration' },
+    { ...common, key: 'projectless', member: ['codex', 'local', 'projectless'], provider: 'codex', id: 'projectless', title: 'Computer conversation', cwd: 'F:/worktrees/temp/Calibration', projectCwd: 'D:/Projects/Calibration', projectless: true },
+    { ...common, key: 'empty', member: ['codex', 'local', 'empty'], provider: 'codex', id: 'empty', title: 'Empty working path', cwd: '', projectCwd: 'D:/Projects/Calibration' },
+  ] });
+  await expect(page.locator('.path-row')).toHaveCount(5);
+  const rootProject = page.locator('.path-row[title*="Projects"]').filter({ hasText: 'Calibration' });
+  await expect(rootProject).toHaveCount(1);
+  await rootProject.click();
+  await expect(page.locator('.session-row')).toHaveCount(4);
+  await expect(page.locator('.session-row')).toContainText(['Original project', 'Worktree one', 'Worktree two', 'Empty working path']);
+  await page.screenshot({ path: '../verification/desktop-codex-project-folders.png' });
+  await page.getByRole('textbox', { name: '세션 검색' }).fill('Projects Calibration Worktree');
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(rootProject).toHaveClass(/active/);
+  await expect(page.locator('.session-row')).toHaveCount(2);
+  await page.getByRole('textbox', { name: '세션 검색' }).fill('abcd');
+  await expect(page.locator('.session-row')).toHaveCount(1);
+  await showDetails(page, page.locator('.session-row'));
+  await expect(page.locator('dd').first()).toHaveText('F:/worktrees/abcd/Calibration');
+  await page.getByRole('button', { name: /Codex Desktop에서 열기/ }).click();
+  await expect(page.getByRole('status')).toContainText('세션 열기를 요청했습니다');
+  expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([{ action: 'open', key: 'worktree-one' }]);
+});
+
 test('ordinary scratch projects, Codex and SSH remain separate folders', async ({ page }) => {
   const scratchPath = 'C:/Users/test/AppData/Roaming/Claude/scratch-workspaces/account/org/scratch-internal';
   const extraSessions = [
