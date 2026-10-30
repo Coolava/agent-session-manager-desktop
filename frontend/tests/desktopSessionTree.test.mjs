@@ -10,6 +10,27 @@ const session = (key, parentKey, lastActivity = 1, extra = {}) => ({ key, parent
 const keys = rows => rows.map(row => row.node.session.key);
 const rows = (tree, scoped = new Set(tree.byKey.keys()), query = '', expanded = new Set(), collapsed = new Set()) => sessionTreeRows(tree, scoped, query, expanded, collapsed);
 
+test('tree guides continue across nested siblings and end at the last visible child', () => {
+  const tree = buildSessionTree([
+    session('parent'), session('a', 'parent', 10), session('a1', 'a', 9), session('a2', 'a', 8),
+    session('b', 'parent', 5), session('b1', 'b', 4), session('other', undefined, 3),
+  ]);
+  const guides = result => result.map(row => [row.node.session.key, row.continuations]);
+  assert.deepEqual(guides(rows(tree, undefined, '', new Set(['parent', 'a', 'b']))), [
+    ['parent', []], ['a', [true]], ['a1', [true, true]], ['a2', [true, false]],
+    ['b', [false]], ['b1', [false, false]], ['other', []],
+  ]);
+  assert.deepEqual(guides(rows(tree, undefined, '', new Set(['parent', 'b']))), [
+    ['parent', []], ['a', [true]], ['b', [false]], ['b1', [false, false]], ['other', []],
+  ]);
+  assert.deepEqual(guides(rows(tree, undefined, 'b1')), [
+    ['parent', []], ['b', [false]], ['b1', [false, false]],
+  ]);
+  assert.deepEqual(guides(rows(tree, new Set(['a2', 'b1']))), [
+    ['parent', []], ['a', [true]], ['a2', [true, false]], ['b', [false]], ['b1', [false, false]],
+  ]);
+});
+
 test('nested families sort by their latest descendant and start collapsed', () => {
   const tree = buildSessionTree([session('parent'), session('child', 'parent', 2), session('grandchild', 'child', 10), session('other', undefined, 5)]);
   assert.deepEqual(keys(rows(tree)), ['parent', 'other']);

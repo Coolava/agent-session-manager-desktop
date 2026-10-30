@@ -261,6 +261,15 @@
               {@const state = activity(session, now)}
               {@const workingChildren = row.descendants.filter(child => activity(child, now).state === 'working').length}
               <div class="session-entry" class:child-entry={row.depth > 0} class:branch-entry={row.descendants.length > 0} class:expanded-entry={row.expanded} data-session-key={session.key} style={`--tree-indent:${Math.min(row.depth, 4) * 28}px`}>
+                <span class="tree-lines" aria-hidden="true">
+                  {#each row.continuations.slice(0, 4) as continues, level}
+                    {#if continues || level === row.depth - 1}
+                      <span class="tree-guide" class:guide-end={!continues && level === row.depth - 1} style={`left:${36 + level * 28}px`}></span>
+                    {/if}
+                  {/each}
+                  {#if row.depth > 0 && row.depth <= 4}<span class="tree-branch"></span>{/if}
+                  {#if row.expanded && row.depth < 4}<span class="tree-stem"></span>{/if}
+                </span>
                 {#if row.descendants.length}
                   <button class="tree-toggle" aria-label={`${row.expanded ? '하위 세션 접기' : '하위 세션 펼치기'}: ${session.title}`} aria-expanded={row.expanded} on:click={() => toggleChildren(session.key, row.automatic)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg></button>
                 {/if}
@@ -305,8 +314,12 @@
   .expanded-entry { background:rgba(var(--accent-rgb),.1); }
   .expanded-entry .session-title strong { font-weight:600; }
   .child-entry { background:rgba(var(--accent-rgb),.055); box-shadow:inset 3px 0 rgba(var(--accent-rgb),.35); }
-  .child-entry::before { content:''; position:absolute; pointer-events:none; left:calc(8px + var(--tree-indent)); top:0; height:50%; width:12px; border-left:2px solid rgba(var(--accent-rgb),.5); border-bottom:2px solid rgba(var(--accent-rgb),.5); border-bottom-left-radius:6px; }
-  .child-entry:not(.branch-entry)::before { width:48px; }
+  .tree-lines { position:absolute; inset:0; pointer-events:none; }
+  .tree-guide,.tree-stem { position:absolute; top:0; bottom:0; border-left:1px solid rgba(var(--accent-rgb),.4); }
+  .tree-guide.guide-end { bottom:50%; }
+  .tree-branch { position:absolute; left:calc(8px + var(--tree-indent)); top:50%; width:12px; border-top:1px solid rgba(var(--accent-rgb),.4); }
+  .child-entry:not(.branch-entry) .tree-branch { width:48px; }
+  .tree-stem { left:calc(36px + var(--tree-indent)); top:calc(50% + 16px); }
   .child-entry .session-title small { color:#8b879d; }
   .child-entry .session-title .hierarchy-summary { color:var(--accent-lighter); }
   .child-entry + .session-entry:not(.child-entry) { margin-top:8px; border-top:1px solid rgba(var(--accent-rgb),.2); }

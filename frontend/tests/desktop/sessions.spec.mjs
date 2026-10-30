@@ -349,6 +349,38 @@ test('nested child searches auto-expand ancestors and remain manually collapsibl
   await page.screenshot({ path: '../verification/desktop-session-hierarchy-minimum.png' });
 });
 
+test('tree connectors join parent buttons, continue through nested rows and stop at the last sibling', async ({ page }) => {
+  const nested = { ...childSessions[0], key: 'nested', id: 'nested', member: ['claude', 'account', 'nested'], parentKey: 'child-aw', childName: 'nested-task' };
+  await setup(page, { extraSessions: [...childSessions, nested], initialRows: 2 });
+  const parent = page.locator('[data-session-key="claude-key"]');
+  const first = page.locator('[data-session-key="child-aw"]');
+  const last = page.locator('[data-session-key="child-wf"]');
+  const grandchild = page.locator('[data-session-key="nested"]');
+  await parent.locator('.tree-toggle').click();
+  await first.locator('.tree-toggle').click();
+  await expect(page.locator('.session-row')).toHaveCount(5);
+  for (const viewport of [{ width: 1380, height: 880 }, { width: 960, height: 640 }]) {
+    await page.setViewportSize(viewport);
+    const [button, stem, firstGuide, nestedGuide, lastGuide, lastBranch, lastRow] = await Promise.all([
+      parent.locator('.tree-toggle').boundingBox(), parent.locator('.tree-stem').boundingBox(),
+      first.locator('.tree-guide').boundingBox(), grandchild.locator('.tree-guide').first().boundingBox(),
+      last.locator('.tree-guide').boundingBox(), last.locator('.tree-branch').boundingBox(), last.boundingBox(),
+    ]);
+    expect(Math.abs(stem.x - (button.x + button.width / 2))).toBeLessThan(1);
+    expect(Math.abs(stem.y - (button.y + button.height))).toBeLessThan(1);
+    expect(Math.abs(stem.y + stem.height - firstGuide.y)).toBeLessThan(1);
+    expect(Math.abs(firstGuide.y + firstGuide.height - nestedGuide.y)).toBeLessThan(1);
+    expect(Math.abs(nestedGuide.y + nestedGuide.height - lastGuide.y)).toBeLessThan(1);
+    expect(Math.abs(lastGuide.y + lastGuide.height - lastBranch.y)).toBeLessThan(1);
+    expect(Math.abs(lastBranch.y - (lastRow.y + lastRow.height / 2))).toBeLessThan(1);
+  }
+  await page.getByRole('textbox', { name: '세션 검색' }).fill('nested-task');
+  await expect(page.locator('.session-row')).toHaveCount(3);
+  await expect(first.locator('.tree-guide.guide-end')).toHaveCount(1);
+  await expect(grandchild.locator('.tree-guide')).toHaveCount(1);
+  expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([]);
+});
+
 test('a group containing only a child shows its ancestors without unrelated siblings', async ({ page }) => {
   await setup(page, { extraSessions: childSessions, initialRows: 2 });
   await page.getByRole('textbox', { name: '새 그룹 이름' }).fill('Child work');

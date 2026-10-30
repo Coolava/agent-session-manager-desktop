@@ -71,14 +71,17 @@ export function sessionTreeRows(
       }
     }
   }
-  const rows: { node: SessionNode; depth: number; expanded: boolean; automatic: boolean; descendants: DesktopSession[] }[] = [];
-  function append(node: SessionNode, depth: number) {
+  const rows: { node: SessionNode; depth: number; expanded: boolean; automatic: boolean; descendants: DesktopSession[]; continuations: boolean[] }[] = [];
+  function append(node: SessionNode, depth: number, continuations: boolean[] = []) {
     if (!included.has(node.session.key)) return;
     const descendants = node.descendants.filter(child => included.has(child.key));
     const automatic = words.length > 0 || !scopedKeys.has(node.session.key);
     const open = descendants.length > 0 && (automatic ? !searchCollapsed.has(node.session.key) : expanded.has(node.session.key));
-    rows.push({ node, depth, expanded: open, automatic, descendants });
-    if (open) for (const child of node.children) append(child, depth + 1);
+    rows.push({ node, depth, expanded: open, automatic, descendants, continuations });
+    if (open) {
+      const children = node.children.filter(child => included.has(child.session.key));
+      children.forEach((child, index) => append(child, depth + 1, [...continuations, index < children.length - 1]));
+    }
   }
   for (const root of tree.roots) append(root, 0);
   return rows;
