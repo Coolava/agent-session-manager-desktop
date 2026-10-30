@@ -1,0 +1,40 @@
+--- a/session_manager/models.py
++++ b/session_manager/models.py
+@@ -48,0 +49,2 @@
++    parent_session_id: str | None = None
++    side_session_name: str = ""
+--- a/session_manager/storage.py
++++ b/session_manager/storage.py
+@@ -32,0 +33,6 @@
++                spawned = data.get("spawnedFrom")
++                spawned = spawned if isinstance(spawned, dict) and spawned.get("sideSession") is True else {}
++                parent_id = spawned.get("sessionId")
++                parent_id = parent_id if isinstance(parent_id, str) and parent_id else None
++                side_name = spawned.get("name")
++                side_name = side_name if isinstance(side_name, str) else ""
+@@ -36 +42 @@
+-                                  path.parent.parent.name, path.parent.name, ssh)
++                                  path.parent.parent.name, path.parent.name, ssh, parent_id, side_name)
+--- a/tests/test_modules.py
++++ b/tests/test_modules.py
+@@ -41,0 +42,20 @@
++    def test_side_session_relationship_is_preserved_without_modifying_metadata(self):
++        parent_id = "local_" + str(uuid4())
++        _, path = self.record(spawnedFrom={"sessionId": parent_id, "sideSession": True, "name": "t3-aw"})
++        original = path.read_bytes()
++        session = SessionStore(self.data).list()[0]
++        self.assertEqual(session.parent_session_id, parent_id)
++        self.assertEqual(session.side_session_name, "t3-aw")
++        self.assertEqual(path.read_bytes(), original)
++
++    def test_missing_or_malformed_side_session_metadata_does_not_drop_the_session(self):
++        for spawned in (None, [], "bad", {"sessionId": [], "sideSession": True, "name": {}}, {"sessionId": "parent", "sideSession": False}):
++            with self.subTest(spawned=spawned):
++                self.record(spawnedFrom=spawned)
++                store = SessionStore(self.data)
++                sessions = store.list()
++                self.assertEqual(len(sessions), 1)
++                self.assertIsNone(sessions[0].parent_session_id)
++                self.assertEqual(sessions[0].side_session_name, "")
++                self.assertEqual(store.warnings, [])
++

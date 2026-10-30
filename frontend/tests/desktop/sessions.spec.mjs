@@ -9,13 +9,14 @@ async function setup(page, options = {}) {
       ...(options.extraSessions ?? []),
     ];
     const groups = [];
+    window.extraActivities = Object.fromEntries(Object.entries(options.childStates ?? {}).map(([key, state]) => [key, { state, detail: 'Child response', observed_at: Date.now() / 1000 }]));
     window.desktopCalls = [];
     window.go = { main: { App: { Call: async request => {
       window.desktopCalls.push(request);
       if (request.action === 'snapshot') return { sessions, groups, warnings: [], groupError: window.groupFailure ? 'Broken groups' : '' };
       if (request.action === 'activities') {
         if (window.claudePending) return new Promise(() => {});
-        return { 'claude-key': { state: 'completed', detail: 'Main response completed', observed_at: Date.now() / 1000 } };
+        return { 'claude-key': { state: 'completed', detail: 'Main response completed', observed_at: Date.now() / 1000 }, ...window.extraActivities };
       }
       if (request.action === 'codex-activities') return { 'codex-key': { state: window.codexState ?? 'working', detail: 'Codex turn state', observed_at: Date.now() / 1000 } };
       if (request.action === 'open') { await new Promise(resolve => setTimeout(resolve, 300)); if (window.openFailure) throw new Error('Desktop link failed'); return { requested: true }; }
@@ -27,8 +28,13 @@ async function setup(page, options = {}) {
     } } } };
   }, options);
   await page.goto('/desktop.html');
-  await expect(page.locator('.session-row')).toHaveCount(2 + (options.extraSessions?.length ?? 0));
+  await expect(page.locator('.session-row')).toHaveCount(options.initialRows ?? 2 + (options.extraSessions?.length ?? 0));
 }
+
+const childSessions = [
+  { key: 'child-aw', member: ['claude', 'account', 'child-aw'], provider: 'claude', id: 'child-aw', title: 'Benchmark AW task', childName: 't3-aw', parentKey: 'claude-key', cwd: 'D:/bench/t3-aw', environment: 'local', host: 'local', lastActivity: 1793300002000 },
+  { key: 'child-wf', member: ['claude', 'account', 'child-wf'], provider: 'claude', id: 'child-wf', title: 'Benchmark WF task', childName: 't3-wf', parentKey: 'claude-key', cwd: 'D:/bench/t3-wf', environment: 'local', host: 'local', lastActivity: 1793300001000 },
+];
 
 test('provider and search filters are preserved across refresh', async ({ page }) => {
   await setup(page);
@@ -205,4 +211,95 @@ test('explicit Codex projectless chats join Claude this computer without groupin
   await page.locator('.path-row').filter({ hasText: 'new-chat' }).click();
   await expect(page.locator('.session-row')).toHaveCount(1);
   await expect(page.locator('.session-row')).toContainText('Codex ordinary folder');
+});
+
+test('families start collapsed, retain expansion and open the original child with parent navigation', async ({ page }) => {
+  await setup(page, { extraSessions: childSessions, initialRows: 2, childStates: { 'child-aw': 'working' } });
+  const parent = page.locator('[data-session-key="claude-key"]');
+  await expect(parent.locator('.badge')).toHaveText('완료');
+  await expect(parent.locator('.hierarchy-summary')).toHaveText('하위 2개 · 1개 작업 중');
+  await expect(page.locator('.path-row').filter({ hasText: /t3-aw|t3-wf/ })).toHaveCount(0);
+  await parent.locator('.tree-toggle').click();
+  await expect(page.locator('.detail-card')).toHaveCount(0);
+  await expect(page.locator('.session-row')).toHaveCount(4);
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(parent.locator('.tree-toggle')).toHaveAttribute('aria-expanded', 'true');
+  await page.locator('[data-session-key="child-aw"] .session-row').click();
+  await expect(page.locator('.detail-card h2')).toHaveText('Benchmark AW task');
+  await expect(page.locator('dd').first()).toHaveText('D:/bench/t3-aw');
+  await page.getByRole('button', { name: /Claude Desktop에서 열기/ }).click();
+  await expect(page.getByRole('status')).toContainText('세션 열기를 요청했습니다');
+  expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([{ action: 'open', key: 'child-aw' }]);
+  await page.locator('.parent-link button').click();
+  await expect(page.locator('.detail-card h2')).toHaveText('Workflow validation');
+  await page.getByRole('button', { name: '← 세션 목록' }).click();
+  await page.getByRole('button', { name: '▱ Inspector · build-host', exact: true }).click();
+  await expect(page.locator('.session-row')).toHaveCount(3);
+  await page.evaluate(() => { window.extraActivities['child-aw'].state = 'completed'; });
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(parent.locator('.descendant-working')).toHaveCount(0);
+  await expect(parent.locator('.badge')).toHaveText('완료');
+});
+
+test('nested child searches auto-expand ancestors and remain manually collapsible', async ({ page }) => {
+  const nested = { ...childSessions[0], key: 'nested', id: 'nested', member: ['claude', 'account', 'nested'], parentKey: 'child-wf', title: 'Nested verification', childName: 'nested-task', cwd: 'D:/bench/nested' };
+  await setup(page, { extraSessions: [...childSessions, nested], initialRows: 2 });
+  const search = page.getByRole('textbox', { name: '세션 검색' });
+  await search.fill('nested-task');
+  await expect(page.locator('.session-row')).toHaveCount(3);
+  await expect(page.locator('[data-session-key="child-aw"]')).toHaveCount(0);
+  await expect(page.locator('[data-session-key="nested"]')).toBeVisible();
+  await page.locator('[data-session-key="claude-key"] .tree-toggle').click();
+  await expect(page.locator('.session-row')).toHaveCount(1);
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(page.locator('.session-row')).toHaveCount(1);
+  await search.fill('t3-aw');
+  await expect(page.locator('.session-row')).toHaveCount(2);
+  await search.fill('');
+  await expect(page.locator('.session-row')).toHaveCount(2);
+  await page.locator('[data-session-key="claude-key"] .tree-toggle').click();
+  await page.locator('[data-session-key="child-wf"] .tree-toggle').click();
+  await expect(page.locator('.session-row')).toHaveCount(5);
+  await page.screenshot({ path: '../verification/desktop-session-hierarchy.png' });
+  await page.setViewportSize({ width: 960, height: 640 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(960);
+  await page.screenshot({ path: '../verification/desktop-session-hierarchy-minimum.png' });
+});
+
+test('a group containing only a child shows its ancestors without unrelated siblings', async ({ page }) => {
+  await setup(page, { extraSessions: childSessions, initialRows: 2 });
+  await page.getByRole('textbox', { name: '새 그룹 이름' }).fill('Child work');
+  await page.getByRole('button', { name: '그룹 만들기' }).click();
+  await page.locator('[data-session-key="claude-key"] .tree-toggle').click();
+  await page.locator('[data-session-key="child-aw"] .session-row').click();
+  await page.getByRole('button', { name: '그룹에 추가', exact: true }).click();
+  await page.getByRole('button', { name: '◇ Child work 1', exact: true }).click();
+  await expect(page.locator('.session-row')).toHaveCount(2);
+  await expect(page.locator('[data-session-key="claude-key"]')).toBeVisible();
+  await expect(page.locator('[data-session-key="child-aw"]')).toBeVisible();
+  await expect(page.locator('[data-session-key="child-wf"]')).toHaveCount(0);
+});
+
+test('a collapsed familys working summary expires with its child observation', async ({ page }) => {
+  await setup(page, { extraSessions: childSessions, initialRows: 2, childStates: { 'child-aw': 'working' } });
+  const parent = page.locator('[data-session-key="claude-key"]');
+  await expect(parent.locator('.descendant-working')).toContainText('1개 작업 중');
+  await page.getByRole('checkbox', { name: '자동 갱신 · 5초' }).uncheck();
+  await page.clock.install();
+  await page.clock.fastForward(16000);
+  await expect(parent.locator('.descendant-working')).toHaveCount(0);
+  await expect(parent.locator('.badge')).toHaveText('확인 불가');
+});
+
+test('missing parents remain accessible and independent sessions retain a shared child folder', async ({ page }) => {
+  const orphan = { ...childSessions[0], key: 'orphan', id: 'orphan', parentKey: 'missing', title: 'Orphan conversation', childName: 'orphan-task', cwd: 'D:/orphan' };
+  const ordinary = { ...childSessions[0], key: 'ordinary', id: 'ordinary', member: ['codex', 'local', 'ordinary'], provider: 'codex', parentKey: null, childName: '', title: 'Independent project chat' };
+  await setup(page, { extraSessions: [...childSessions, orphan, ordinary], initialRows: 4 });
+  await expect(page.locator('[data-session-key="orphan"]')).toContainText('부모 대화 확인 불가');
+  await page.locator('[data-session-key="orphan"] .session-row').click();
+  await expect(page.locator('.parent-link')).toHaveText('부모 대화 확인 불가');
+  await page.getByRole('button', { name: '← 세션 목록' }).click();
+  await page.getByRole('button', { name: '▱ t3-aw', exact: true }).click();
+  await expect(page.locator('.session-row')).toHaveCount(1);
+  await expect(page.locator('.session-row')).toContainText('Independent project chat');
 });

@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 
 import bridge
 from session_manager.models import Session
+from session_manager.storage import SessionStore
 
 
 class DesktopBridgeTests(unittest.TestCase):
@@ -138,6 +139,23 @@ class DesktopBridgeTests(unittest.TestCase):
         keys = [session["key"] for session in snapshot["sessions"]]
         self.assertEqual(len(keys), 2)
         self.assertEqual(len(set(keys)), 2)
+
+    def test_claude_parent_keys_stay_in_the_childs_account_and_organization(self):
+        parent_id = "local_00000000-0000-4000-8000-000000000099"
+        original = json.dumps({"sessionId": "local_" + self.identifier, "title": "Child", "cwd": "D:/child", "spawnedFrom": {"sessionId": parent_id, "sideSession": True, "name": "t3-aw"}})
+        for account, org in (("account-a", "org-a"), ("account-b", "org-b")):
+            path = self.home / account / org / ("local_" + self.identifier + ".json")
+            path.parent.mkdir(parents=True)
+            path.write_text(original, encoding="utf-8")
+        manager = self.manager()
+        manager.store = SessionStore(self.home)
+        manager.list_sessions.side_effect = manager.store.list
+        sessions, warnings = bridge.claude_sessions(manager)
+        self.assertEqual([json.loads(s["parentKey"]) for s in sessions], [["claude", "account-a:org-a", parent_id], ["claude", "account-b:org-b", parent_id]])
+        self.assertEqual([s["childName"] for s in sessions], ["t3-aw", "t3-aw"])
+        self.assertEqual(warnings, [])
+        for path in self.home.glob("*/*/*.json"):
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
 
     def test_broken_groups_are_reported_and_never_overwritten(self):
         path = self.home / "groups.json"

@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-30",
+  "timezone": "Asia/Seoul",
+  "reason": "Shared Python source directory is not a Git repository; this patch records only this task and hashes identify the verified files.",
+  "files": [
+    {
+      "path": "D:\\repos\\intellian\\Session_Manager\\session_manager\\models.py",
+      "sha256": "1a5e1eaed815b3f0d8442e88dbd5fbfcb1c6407fbdc0905792dc3f11fa68fb69"
+    },
+    {
+      "path": "D:\\repos\\intellian\\Session_Manager\\session_manager\\storage.py",
+      "sha256": "e314ec029c3b853f7db451683c4f1d43ddfefe96bbd3b048f3cfc868afb68f76"
+    },
+    {
+      "path": "D:\\repos\\intellian\\Session_Manager\\tests\\test_modules.py",
+      "sha256": "d31449a059e4bbf3959c1667ecb856631e15afcbb7477b68486e2c73ea21eb66"
+    }
+  ]
+}

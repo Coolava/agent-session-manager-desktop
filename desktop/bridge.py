@@ -69,10 +69,13 @@ def claude_sessions(manager):
         if session.environment not in ("local", "ssh"):
             continue
         member = ["claude", session.account_id + ":" + session.organization_id, session.id]
+        parent = ["claude", member[1], session.parent_session_id] if session.parent_session_id else None
         result.append({"key": json.dumps(member, separators=(",", ":")), "member": member,
                        "provider": "claude", "id": session.id, "title": session.title, "cwd": session.origin_cwd or session.cwd,
                        "environment": session.environment, "host": (session.ssh.host + (f":{session.ssh.port}" if session.ssh.port != 22 else "")) if session.ssh else "local",
-                       "account": session.account_id, "organization": session.organization_id, "lastActivity": session.last_activity_at})
+                       "account": session.account_id, "organization": session.organization_id, "lastActivity": session.last_activity_at,
+                       "parentKey": json.dumps(parent, separators=(",", ":")) if parent else None,
+                       "childName": session.side_session_name})
     return result, [str(warning) for warning in manager.store.warnings]
 
 
