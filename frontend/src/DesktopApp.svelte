@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import AgentIcon from './lib/components/common/AgentIcon.svelte';
   import logo from './assets/icons/asmgr.svg';
   import { buildSessionTree, sessionRoot, sessionTreeRows, type DesktopSession as Session } from './lib/utils/desktopSessionTree';
@@ -20,6 +20,8 @@
   let query = '';
   let scope = 'all';
   let selectedKey = '';
+  let sessionMenu: { key: string; x: number; y: number; trigger: HTMLButtonElement } | null = null;
+  let menuElement: HTMLDivElement;
   let loading = false;
   let opening = false;
   let activityLoading = { claude: false, codex: false };
@@ -65,6 +67,7 @@
       const data = await call<Snapshot>('snapshot');
       sessions = data.sessions; groups = data.groups; warnings = data.warnings; groupError = data.groupError;
       if (selectedKey && !sessions.some(s => s.key === selectedKey)) selectedKey = '';
+      if (sessionMenu && !sessions.some(s => s.key === sessionMenu!.key)) closeSessionMenu();
       if (scope.startsWith('group:') && !groups.some(g => `group:${g.id}` === scope)) scope = 'all';
       if (!groups.some(g => g.id === targetGroup)) targetGroup = groups[0]?.id ?? '';
       refreshError = '';
@@ -75,6 +78,7 @@
   }
 
   async function openSession(session: Session) {
+    closeSessionMenu();
     if (opening) return;
     opening = true; error = ''; notice = '';
     try {
@@ -82,6 +86,32 @@
       notice = `${session.provider === 'codex' ? 'Codex' : 'Claude'} Desktop에 세션 열기를 요청했습니다.`;
     } catch (failure) { error = String(failure); }
     finally { opening = false; }
+  }
+
+  function closeSessionMenu(restoreFocus = false) {
+    const trigger = sessionMenu?.trigger;
+    sessionMenu = null;
+    if (restoreFocus) trigger?.focus();
+  }
+
+  async function showSessionMenu(event: MouseEvent | KeyboardEvent, session: Session) {
+    event.preventDefault();
+    const trigger = event.currentTarget as HTMLButtonElement;
+    const rect = trigger.getBoundingClientRect();
+    const x = event instanceof MouseEvent ? event.clientX : rect.left;
+    const y = event instanceof MouseEvent ? event.clientY : rect.bottom;
+    const menu = { key: session.key, x, y, trigger };
+    sessionMenu = menu;
+    await tick();
+    if (sessionMenu !== menu) return;
+    const bounds = menuElement.getBoundingClientRect();
+    sessionMenu = { ...menu, x: Math.max(8, Math.min(x, window.innerWidth - bounds.width - 8)), y: Math.max(8, Math.min(y, window.innerHeight - bounds.height - 8)) };
+    menuElement.querySelector('button')?.focus();
+  }
+
+  function showSessionDetails() {
+    if (sessionMenu) selectedKey = sessionMenu.key;
+    closeSessionMenu();
   }
 
   async function groupAction(action: string, payload: Record<string, unknown>) {
@@ -133,6 +163,14 @@
     return () => { clearInterval(timer); clearInterval(refreshTimer); };
   });
 </script>
+
+<svelte:window
+  on:pointerdown={event => { if (!(event.target instanceof Element) || !event.target.closest('.session-menu')) closeSessionMenu(); }}
+  on:keydown={event => { if (sessionMenu && (event.key === 'Escape' || event.key === 'Tab')) { if (event.key === 'Escape') event.preventDefault(); closeSessionMenu(true); } }}
+  on:scroll|capture={() => closeSessionMenu()}
+  on:resize={() => closeSessionMenu()}
+  on:blur={() => closeSessionMenu()}
+/>
 
 <div class="desktop-app">
   <header style="--wails-draggable:drag">
@@ -226,7 +264,7 @@
                 {#if row.descendants.length}
                   <button class="tree-toggle" aria-label={`${row.expanded ? '하위 세션 접기' : '하위 세션 펼치기'}: ${session.title}`} aria-expanded={row.expanded} on:click={() => toggleChildren(session.key, row.automatic)}>{row.expanded ? '▾' : '▸'}</button>
                 {/if}
-                <button class="session-row" on:click={() => selectedKey = session.key} on:dblclick={() => openSession(session)} disabled={opening} title={session.title}>
+                <button class="session-row" on:click={event => { if (event.detail < 2) void openSession(session); }} on:contextmenu={event => showSessionMenu(event, session)} on:keydown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) void showSessionMenu(event, session); }} aria-haspopup="menu" disabled={opening} title={session.title}>
                   <span class="session-title"><AgentIcon agent={session.provider} size="md" /><span><strong>{session.childName || session.title}</strong><small>{session.environment === 'ssh' ? `SSH · ${session.host}` : `${session.provider === 'codex' ? 'Codex' : 'Claude'} · 로컬`}{#if session.parentKey}{' · 하위 세션'}{/if}{#if row.node.parentUnavailable}<span class="missing-parent">{' · 부모 대화 확인 불가'}</span>{/if}</small>{#if row.descendants.length}<small class="hierarchy-summary" title="현재 필터에 포함된 하위 세션">하위 {row.descendants.length}개{#if workingChildren}<span class="descendant-working">{' · '}{workingChildren}개 작업 중</span>{/if}</small>{/if}</span></span>
                   <span class="session-path" title={session.cwd}>{folder(session.cwd)}<small>{session.cwd}</small></span>
                   <span class="badge {state.state}">{labels[state.state]}</span><time>{date(session.lastActivity)}</time>
@@ -239,10 +277,16 @@
       <footer>{activityLoading.claude || activityLoading.codex ? '실행 상태 확인 중…' : '완료 상태는 최근 응답의 정상 종료를 뜻합니다.'}<span>대화는 각 Desktop 앱에서 실행됩니다.</span></footer>
     </main>
   </div>
+  {#if sessionMenu}
+    <div class="session-menu" role="menu" aria-label="세션 메뉴" tabindex="-1" bind:this={menuElement} style={`left:${sessionMenu.x}px;top:${sessionMenu.y}px`}>
+      <button role="menuitem" on:click={showSessionDetails}>세션 상세</button>
+    </div>
+  {/if}
 </div>
 
 <style>
   .desktop-app { height:100vh; display:flex; flex-direction:column; background:linear-gradient(135deg,var(--bg-surface),var(--bg-sunken),var(--bg-surface)); color:#e4e4e7; font-size:13px; }
+  .session-menu { position:fixed; z-index:100; width:180px; padding:6px; border:1px solid #ffffff20; border-radius:8px; background:var(--bg-raised); box-shadow:0 8px 24px #0008; } .session-menu button { display:block; width:100%; border:0; border-radius:4px; padding:10px 12px; background:none; text-align:left; } .session-menu button:hover,.session-menu button:focus-visible { background:rgba(var(--accent-rgb),.15); outline:none; }
   header { height:66px; flex-shrink:0; display:flex; align-items:center; justify-content:space-between; padding:0 12px 0 22px; border-bottom:1px solid rgba(var(--accent-rgb),.16); background:var(--bg-base); }
   .brand { display:flex; align-items:center; gap:12px; } .brand img { width:34px; height:34px; } .brand strong { display:block; font-size:14px; } .brand span { display:block; font-size:9px; color:var(--accent-light); letter-spacing:2px; margin-top:5px; }
   .header-tools { display:flex; align-items:center; gap:8px; } button,input { font:inherit; } button { cursor:pointer; color:inherit; } button:disabled { cursor:default; opacity:.5; }

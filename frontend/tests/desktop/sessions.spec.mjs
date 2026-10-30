@@ -19,7 +19,7 @@ async function setup(page, options = {}) {
         return { 'claude-key': { state: 'completed', detail: 'Main response completed', observed_at: Date.now() / 1000 }, ...window.extraActivities };
       }
       if (request.action === 'codex-activities') return { 'codex-key': { state: window.codexState ?? 'working', detail: 'Codex turn state', observed_at: Date.now() / 1000 } };
-      if (request.action === 'open') { await new Promise(resolve => setTimeout(resolve, 300)); if (window.openFailure) throw new Error('Desktop link failed'); return { requested: true }; }
+      if (request.action === 'open') { await new Promise(resolve => setTimeout(resolve, window.openDelay ?? 300)); if (window.openFailure) throw new Error('Desktop link failed'); return { requested: true }; }
       if (request.action === 'create-group') { const group = { id: 'group-1', name: request.name, members: [] }; groups.push(group); return group; }
       if (request.action === 'add-member') groups[0].members.push(sessions.find(s => s.key === request.key).member);
       if (request.action === 'rename-group') groups[0].name = request.name;
@@ -29,6 +29,11 @@ async function setup(page, options = {}) {
   }, options);
   await page.goto('/desktop.html');
   await expect(page.locator('.session-row')).toHaveCount(options.initialRows ?? 2 + (options.extraSessions?.length ?? 0));
+}
+
+async function showDetails(page, row) {
+  await row.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '세션 상세' }).click();
 }
 
 const childSessions = [
@@ -45,9 +50,87 @@ test('provider and search filters are preserved across refresh', async ({ page }
   await expect(page.locator('.session-row')).toContainText('Session manager UI');
 });
 
+for (const [key, title] of [['claude-key', 'Workflow validation'], ['codex-key', 'Session manager UI']]) {
+  test(`one click opens ${key} while keeping the session list`, async ({ page }) => {
+    await setup(page);
+    await page.locator('.session-row').filter({ hasText: title }).click();
+    await expect(page.locator('.session-row').first()).toBeDisabled();
+    await expect(page.getByRole('status')).toContainText('세션 열기를 요청했습니다');
+    await expect(page.locator('.detail-card')).toHaveCount(0);
+    await expect(page.locator('.session-row')).toHaveCount(2);
+    expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([{ action: 'open', key }]);
+  });
+}
+
+test('double clicking does not issue a second open request after a fast response', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => { window.openDelay = 0; });
+  await page.locator('[data-session-key="codex-key"] .session-row').dblclick();
+  await expect(page.getByRole('status')).toContainText('세션 열기를 요청했습니다');
+  expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([{ action: 'open', key: 'codex-key' }]);
+});
+
+test('right click targets the latest row and opens details without opening an app', async ({ page }) => {
+  await setup(page);
+  await page.locator('[data-session-key="claude-key"] .session-row').click({ button: 'right' });
+  await expect(page.getByRole('menu')).toBeVisible();
+  await expect(page.locator('.detail-card')).toHaveCount(0);
+  await page.locator('[data-session-key="codex-key"] .session-row').click({ button: 'right' });
+  await page.getByRole('button', { name: '↻ 새로고침' }).focus();
+  await page.getByRole('menuitem', { name: '세션 상세' }).click();
+  await expect(page.locator('.detail-card h2')).toHaveText('Session manager UI');
+  await expect(page.locator('.session-menu')).toHaveCount(0);
+  expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([]);
+});
+
+test('context menu supports keyboard entry and dismissal', async ({ page }) => {
+  await setup(page);
+  const row = page.locator('[data-session-key="claude-key"] .session-row');
+  await row.focus();
+  await page.keyboard.press('Shift+F10');
+  await expect(page.getByRole('menuitem')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  await expect(row).toBeFocused();
+  await page.keyboard.press('ContextMenu');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.detail-card h2')).toHaveText('Workflow validation');
+  expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([]);
+});
+
+test('context menu stays within the minimum window and closes on outside click or scroll', async ({ page }) => {
+  await setup(page);
+  await page.setViewportSize({ width: 960, height: 640 });
+  const row = page.locator('[data-session-key="codex-key"] .session-row');
+  await row.evaluate(element => element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 958, clientY: 638 })));
+  await expect(page.getByRole('menuitem')).toBeFocused();
+  await expect.poll(async () => (await page.getByRole('menu').boundingBox()).x).toBeGreaterThan(700);
+  const bounds = await page.getByRole('menu').boundingBox();
+  expect(bounds.y).toBeGreaterThan(500);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(952);
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(632);
+  await page.screenshot({ path: 'test-results/desktop-session-menu.png' });
+  await page.getByRole('heading', { name: 'Sessions', exact: true }).click();
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  await row.click({ button: 'right' });
+  await page.locator('main').dispatchEvent('scroll');
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([]);
+});
+
+test('expanding a family does not open an app and clicking a child opens its own session', async ({ page }) => {
+  await setup(page, { extraSessions: childSessions, initialRows: 2 });
+  await page.locator('[data-session-key="claude-key"] .tree-toggle').click();
+  expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([]);
+  await page.locator('[data-session-key="child-aw"] .session-row').click();
+  await expect(page.getByRole('status')).toContainText('세션 열기를 요청했습니다');
+  await expect(page.locator('.detail-card')).toHaveCount(0);
+  expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([{ action: 'open', key: 'child-aw' }]);
+});
+
 test('opens the selected provider session once and reports a failed link request', async ({ page }) => {
   await setup(page);
-  await page.locator('.session-row').filter({ hasText: 'Session manager UI' }).click();
+  await showDetails(page, page.locator('.session-row').filter({ hasText: 'Session manager UI' }));
   await page.getByRole('button', { name: /Codex Desktop에서 열기/ }).click();
   await expect(page.getByRole('button', { name: '세션을 여는 중…' })).toBeDisabled();
   await expect(page.getByRole('status')).toContainText('세션 열기를 요청했습니다');
@@ -63,7 +146,7 @@ test('groups retain memberships across snapshot refresh', async ({ page }) => {
   await page.getByRole('textbox', { name: '새 그룹 이름' }).fill('Release work');
   await page.getByRole('button', { name: '그룹 만들기' }).click();
   await expect(page.getByRole('button', { name: '◇ Release work 0' })).toBeVisible();
-  await page.locator('.session-row').filter({ hasText: 'Workflow validation' }).click();
+  await showDetails(page, page.locator('.session-row').filter({ hasText: 'Workflow validation' }));
   await page.getByRole('button', { name: '그룹에 추가', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Release work ×', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '← 세션 목록' }).click();
@@ -94,7 +177,7 @@ test('old activity becomes unknown when automatic refresh is off', async ({ page
   await page.clock.install();
   await page.clock.fastForward(16000);
   await expect(page.locator('.badge.completed')).toHaveCount(0);
-  await page.locator('.session-row').filter({ hasText: 'Workflow validation' }).click();
+  await showDetails(page, page.locator('.session-row').filter({ hasText: 'Workflow validation' }));
   await expect(page.locator('dd').last()).toContainText('15초 이상 지연');
 });
 
@@ -157,7 +240,7 @@ test('Claude scratch workspaces share this computer and retain search, refresh a
   await expect(computer).toHaveClass(/active/);
   await expect(page.locator('.session-row')).toHaveCount(1);
   await expect(page.locator('.session-row')).toContainText('Local research');
-  await page.locator('.session-row').click();
+  await showDetails(page, page.locator('.session-row'));
   await expect(page.locator('dd').first()).toHaveText(scratchSessions[1].cwd);
   await page.getByRole('button', { name: /Claude Desktop에서 열기/ }).click();
   await expect(page.getByRole('status')).toContainText('세션 열기를 요청했습니다');
@@ -199,7 +282,7 @@ test('explicit Codex projectless chats join Claude this computer without groupin
   await page.getByRole('button', { name: '↻ 새로고침' }).click();
   await expect(computer).toHaveClass(/active/);
   await expect(page.locator('.session-row')).toHaveCount(1);
-  await page.locator('.session-row').click();
+  await showDetails(page, page.locator('.session-row'));
   await expect(page.locator('dd').first()).toHaveText('D:/Projects/SessionManager');
   await page.getByRole('button', { name: /Codex Desktop에서 열기/ }).click();
   await expect(page.getByRole('status')).toContainText('세션 열기를 요청했습니다');
@@ -224,7 +307,7 @@ test('families start collapsed, retain expansion and open the original child wit
   await expect(page.locator('.session-row')).toHaveCount(4);
   await page.getByRole('button', { name: '↻ 새로고침' }).click();
   await expect(parent.locator('.tree-toggle')).toHaveAttribute('aria-expanded', 'true');
-  await page.locator('[data-session-key="child-aw"] .session-row').click();
+  await showDetails(page, page.locator('[data-session-key="child-aw"] .session-row'));
   await expect(page.locator('.detail-card h2')).toHaveText('Benchmark AW task');
   await expect(page.locator('dd').first()).toHaveText('D:/bench/t3-aw');
   await page.getByRole('button', { name: /Claude Desktop에서 열기/ }).click();
@@ -271,7 +354,7 @@ test('a group containing only a child shows its ancestors without unrelated sibl
   await page.getByRole('textbox', { name: '새 그룹 이름' }).fill('Child work');
   await page.getByRole('button', { name: '그룹 만들기' }).click();
   await page.locator('[data-session-key="claude-key"] .tree-toggle').click();
-  await page.locator('[data-session-key="child-aw"] .session-row').click();
+  await showDetails(page, page.locator('[data-session-key="child-aw"] .session-row'));
   await page.getByRole('button', { name: '그룹에 추가', exact: true }).click();
   await page.getByRole('button', { name: '◇ Child work 1', exact: true }).click();
   await expect(page.locator('.session-row')).toHaveCount(2);
@@ -296,7 +379,7 @@ test('missing parents remain accessible and independent sessions retain a shared
   const ordinary = { ...childSessions[0], key: 'ordinary', id: 'ordinary', member: ['codex', 'local', 'ordinary'], provider: 'codex', parentKey: null, childName: '', title: 'Independent project chat' };
   await setup(page, { extraSessions: [...childSessions, orphan, ordinary], initialRows: 4 });
   await expect(page.locator('[data-session-key="orphan"]')).toContainText('부모 대화 확인 불가');
-  await page.locator('[data-session-key="orphan"] .session-row').click();
+  await showDetails(page, page.locator('[data-session-key="orphan"] .session-row'));
   await expect(page.locator('.parent-link')).toHaveText('부모 대화 확인 불가');
   await page.getByRole('button', { name: '← 세션 목록' }).click();
   await page.getByRole('button', { name: '▱ t3-aw', exact: true }).click();
