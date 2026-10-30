@@ -1,5 +1,6 @@
 build/bin
 node_modules
+/.tools/
 frontend/dist
 frontend/test-results/
 frontend/playwright-report/

@@ -1,0 +1,62 @@
+{
+  "date": "2026-10-30",
+  "timezone": "Asia/Seoul",
+  "upstream_commit": "2ee0449d8721a2d32433ba8515667dcd5318b143",
+  "overall": "single_local_existing_session_verified_for_both_providers",
+  "required_behavior": "Open the selected existing session in a separate OS window of its provider Desktop app",
+  "codex": {
+    "installed_package": "OpenAI.Codex_26.1027.3384.0_x64__2p2nqsd0c76g0",
+    "app_package_json_version": "26.1027.30824",
+    "official_reference": "https://learn.chatgpt.com/docs/reference/commands#deep-links",
+    "existing_session_link": "codex://threads/<thread-id>",
+    "new_session_link": "codex://threads/new?path=<encoded-absolute-path>",
+    "source_evidence": [
+      {
+        "module": ".vite/build/early-bootstrap-339-096ec1020e8592e0.js",
+        "observation": "The threads URL becomes a localConversation route. The route is queued and dispatched through an ensured existing/main app window. No external independent-window selector was identified in this inspected path."
+      },
+      {
+        "module": ".vite/build/early-bootstrap-491-e75c34fa1b2c0832.js",
+        "observation": "The open-in-new-window host message validates a path and invokes the separate-window callback. This is separate from the OS deep-link handler."
+      },
+      {
+        "module": "webview/assets/local-conversation-page-f83093659424.js",
+        "observation": "The internal UI dispatches open-in-new-window with the conversation path when the feature gate permits it."
+      }
+    ],
+    "external_independent_window_entrypoint": "Windows UI Automation File menu New Window InvokePattern, followed by the official thread deep link",
+    "runtime_independent_window_test": {
+      "result": "passed",
+      "method": "Native C# System.Windows.Automation; no Computer Use tool, screenshot, coordinate click, keystroke injection or model prompt",
+      "thread_id": "01a18a2c-6acb-7a02-900a-2f32185afb9c",
+      "original_window": 1246974,
+      "new_window": 1574424,
+      "new_document_before_link": "ChatGPT",
+      "original_document_after_link": "Compare agent session manager apps",
+      "new_document_after_link": "Compare agent session manager apps"
+    },
+    "fallback_to_existing_window": "explicitly_disallowed_by_user",
+    "conclusion": "Native semantic UI Automation plus deep link successfully opened the target in a separate OS window. A reusable helper still needs bounded waits, target validation and failure handling."
+  },
+  "claude": {
+    "existing_implementation": "D:/repos/intellian/Session_Manager",
+    "existing_session_bridge_tool": "mcp__ccd_window__open_session_in",
+    "new_composer_link": "claude://code/new",
+    "new_composer_opens_independent_window": false,
+    "runtime_reverification_this_task": {
+      "result": "passed",
+      "desktop_session_id": "local_1cc6efd8-153a-4169-aaf1-8344d05c508d",
+      "request_id": "ae12d2a3-df32-4f6a-af0f-bb09cf2b3785",
+      "elapsed_seconds": 1.97,
+      "main_window": 133180,
+      "popout_window": 5638184,
+      "popout_title": "Claude Desktop 새 창 세션 기능"
+    },
+    "conclusion": "The existing local session bridge returned a session-bound successful reply and the corresponding independent native window was observed. SSH and new-session independent windows remain separate verification targets."
+  },
+  "safety": {
+    "installed_app_modified": false,
+    "session_data_modified": false,
+    "model_prompt_sent": false
+  }
+}
