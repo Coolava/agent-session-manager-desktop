@@ -174,3 +174,35 @@ test('ordinary scratch projects, Codex and SSH remain separate folders', async (
     await expect(page.locator('.session-row')).toContainText(session.title);
   }
 });
+
+test('explicit Codex projectless chats join Claude this computer without grouping ordinary paths', async ({ page }) => {
+  await setup(page, { extraSessions: [
+    { key: 'claude-scratch', member: ['claude', 'account', 'claude-scratch'], provider: 'claude', id: 'claude-scratch', title: 'Claude local chat', cwd: 'C:/Users/test/AppData/Roaming/Claude/scratch-workspaces/account/org/scratch-one', environment: 'local', host: 'local', lastActivity: 1793300000000 },
+    { key: 'codex-projectless', member: ['codex', 'local', 'codex-projectless'], provider: 'codex', id: 'codex-projectless', title: 'Codex local chat', cwd: 'D:/Projects/SessionManager', environment: 'local', host: 'local', projectless: true, lastActivity: 1793300000000 },
+    { key: 'codex-empty', member: ['codex', 'local', 'codex-empty'], provider: 'codex', id: 'codex-empty', title: 'Codex empty path', cwd: '', environment: 'local', host: 'local', projectless: true, lastActivity: 1793300000000 },
+    { key: 'codex-ordinary', member: ['codex', 'local', 'codex-ordinary'], provider: 'codex', id: 'codex-ordinary', title: 'Codex ordinary folder', cwd: 'C:/Users/test/Documents/Codex/2026-10-30/new-chat', environment: 'local', host: 'local', projectless: false, lastActivity: 1793300000000 },
+  ] });
+  const computer = page.locator('.path-row').filter({ hasText: '이 컴퓨터' });
+  await expect(computer).toHaveCount(1);
+  await expect(page.locator('.path-row')).toHaveCount(4);
+  await computer.click();
+  await expect(page.locator('.session-row')).toHaveCount(3);
+  await expect(page.locator('.session-row')).toContainText(['Claude local chat', 'Codex local chat', 'Codex empty path']);
+  await page.screenshot({ path: '../verification/desktop-codex-projectless.png' });
+  await page.getByRole('textbox', { name: '세션 검색' }).fill('SessionManager Codex');
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(computer).toHaveClass(/active/);
+  await expect(page.locator('.session-row')).toHaveCount(1);
+  await page.locator('.session-row').click();
+  await expect(page.locator('dd').first()).toHaveText('D:/Projects/SessionManager');
+  await page.getByRole('button', { name: /Codex Desktop에서 열기/ }).click();
+  await expect(page.getByRole('status')).toContainText('세션 열기를 요청했습니다');
+  expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([{ action: 'open', key: 'codex-projectless' }]);
+  await page.getByRole('textbox', { name: '세션 검색' }).fill('');
+  await page.locator('.path-row').filter({ hasText: 'SessionManager' }).click();
+  await expect(page.locator('.session-row')).toHaveCount(1);
+  await expect(page.locator('.session-row')).toContainText('Session manager UI');
+  await page.locator('.path-row').filter({ hasText: 'new-chat' }).click();
+  await expect(page.locator('.session-row')).toHaveCount(1);
+  await expect(page.locator('.session-row')).toContainText('Codex ordinary folder');
+});

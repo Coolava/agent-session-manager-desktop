@@ -25,6 +25,19 @@ def codex_sessions(home=None):
     databases = sorted(home.glob("state_*.sqlite"), key=lambda p: int(p.stem.split("_")[-1]), reverse=True)
     if not databases:
         return [], ["Codex의 로컬 세션 데이터베이스를 찾지 못했습니다."]
+    projectless_ids, warnings = set(), []
+    try:
+        state = json.loads((home / ".codex-global-state.json").read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            raise ValueError("지원하지 않는 Codex 전역 상태 형식입니다.")
+        identifiers = state.get("projectless-thread-ids", [])
+        if not isinstance(identifiers, list) or any(not isinstance(value, str) for value in identifiers):
+            raise ValueError("지원하지 않는 Codex 프로젝트 미지정 목록 형식입니다.")
+        projectless_ids = set(identifiers)
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError) as error:
+        warnings.append("Codex 프로젝트 미지정 대화 분류를 읽지 못했습니다: " + str(error))
     sessions = []
     with closing(sqlite3.connect(databases[0].resolve().as_uri() + "?mode=ro", uri=True, timeout=2)) as connection:
         connection.row_factory = sqlite3.Row
@@ -45,8 +58,9 @@ def codex_sessions(home=None):
             sessions.append({"key": json.dumps(member, separators=(",", ":")), "member": member,
                              "provider": "codex", "id": identifier, "title": row["name"] or row["title"] or identifier,
                              "cwd": (row["cwd"] or "").removeprefix("\\\\?\\"), "environment": "local", "host": "local",
+                             "projectless": identifier in projectless_ids,
                              "lastActivity": row["recency_at_ms"] or 0})
-    return sessions, []
+    return sessions, warnings
 
 
 def claude_sessions(manager):

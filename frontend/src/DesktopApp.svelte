@@ -4,7 +4,7 @@
   import logo from './assets/icons/asmgr.svg';
   import { WindowMinimise, WindowToggleMaximise, Quit } from '../wailsjs/runtime/runtime';
 
-  type Session = { key: string; member: string[]; provider: string; id: string; title: string; cwd: string; environment: string; host: string; lastActivity: number };
+  type Session = { key: string; member: string[]; provider: string; id: string; title: string; cwd: string; environment: string; host: string; lastActivity: number; projectless?: boolean };
   type Group = { id: string; name: string; members: string[][] };
   type Snapshot = { sessions: Session[]; groups: Group[]; warnings: string[]; groupError: string };
   type Activity = { state: string; detail: string; observed_at: number };
@@ -93,17 +93,19 @@
 
   function contains(group: Group, session: Session) { return group.members.some(member => JSON.stringify(member) === JSON.stringify(session.member)); }
   function isComputerWorkspace(session: Session) {
-    return session.provider === 'claude' && session.environment === 'local'
+    if (session.environment !== 'local') return false;
+    if (session.provider === 'codex') return session.projectless === true;
+    return session.provider === 'claude'
       && /(?:^|[\\/])scratch-workspaces[\\/][^\\/]+[\\/][^\\/]+[\\/]scratch-[^\\/]+[\\/]?$/i.test(session.cwd);
   }
-  function projectKey(session: Session) { return JSON.stringify(isComputerWorkspace(session) ? ['claude-scratch', session.environment, session.host] : [session.environment, session.host, session.cwd]); }
+  function projectKey(session: Session) { return JSON.stringify(isComputerWorkspace(session) ? ['computer', session.environment, session.host] : [session.environment, session.host, session.cwd]); }
   function projectLabel(session: Session) { return isComputerWorkspace(session) ? '이 컴퓨터' : folder(session.cwd) + (session.environment === 'ssh' ? ` · ${session.host}` : ''); }
   function folder(path: string) { return path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path || '작업 폴더 없음'; }
   function date(value: number) { return value ? new Date(value).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '기록 없음'; }
 
   $: selected = sessions.find(s => s.key === selectedKey);
   $: selectedGroup = groups.find(g => `group:${g.id}` === scope);
-  $: paths = [...new Map(sessions.filter(s => s.cwd).map(s => [projectKey(s), s])).values()].sort((a, b) => a.cwd.localeCompare(b.cwd));
+  $: paths = [...new Map(sessions.filter(s => s.cwd || isComputerWorkspace(s)).map(s => [projectKey(s), s])).values()].sort((a, b) => a.cwd.localeCompare(b.cwd));
   $: visible = sessions.filter(session => {
     if (scope === 'claude' || scope === 'codex') { if (session.provider !== scope) return false; }
     if (scope.startsWith('path:') && projectKey(session) !== scope.slice(5)) return false;
@@ -153,7 +155,7 @@
       <details class="projects" open>
         <summary class="sidebar-label spaced">PROJECT FOLDERS <span>{paths.length}</span></summary>
         {#each paths as project}
-          <button class="nav-row path-row" class:active={scope === `path:${projectKey(project)}`} title={isComputerWorkspace(project) ? 'Claude · 이 컴퓨터' : `${project.host} · ${project.cwd}`} on:click={() => { scope = `path:${projectKey(project)}`; selectedKey = ''; }}><span class="folder-icon">▱</span><span>{projectLabel(project)}</span></button>
+          <button class="nav-row path-row" class:active={scope === `path:${projectKey(project)}`} title={isComputerWorkspace(project) ? '이 컴퓨터 · 프로젝트 미지정 대화' : `${project.host} · ${project.cwd}`} on:click={() => { scope = `path:${projectKey(project)}`; selectedKey = ''; }}><span class="folder-icon">▱</span><span>{projectLabel(project)}</span></button>
         {/each}
       </details>
       <div class="sidebar-footer"><span class="connection-dot"></span> Local desktop connections</div>

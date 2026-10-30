@@ -40,8 +40,49 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertEqual(sessions[0]["title"], "Desktop title")
         self.assertEqual(sessions[0]["cwd"], r"D:\project")
         self.assertEqual(sessions[0]["lastActivity"], 123000)
+        self.assertFalse(sessions[0]["projectless"])
         self.assertEqual(warnings, [])
         self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before)
+        self.assertFalse((self.home / ".codex-global-state.json").exists())
+
+    def test_codex_projectless_ids_are_authoritative_and_refresh_without_mutating_state(self):
+        database = self.database()
+        other_id = "00000000-0000-4000-8000-000000000003"
+        with closing(sqlite3.connect(database)) as connection, connection:
+            connection.execute("INSERT INTO threads VALUES(?,?,?,?,?,?,?)", (other_id, "Same folder", None, r"\\?\D:\project", 123, None, 0))
+        state_path = self.home / ".codex-global-state.json"
+        contents = json.dumps({"projectless-thread-ids": [self.identifier]})
+        state_path.write_text(contents, encoding="utf-8")
+        before = hashlib.sha256(database.read_bytes()).hexdigest()
+        sessions, warnings = bridge.codex_sessions(self.home)
+        self.assertEqual({s["id"]: s["projectless"] for s in sessions}, {self.identifier: True, other_id: False})
+        self.assertEqual({s["cwd"] for s in sessions}, {r"D:\project"})
+        self.assertEqual(warnings, [])
+        self.assertEqual(state_path.read_text(encoding="utf-8"), contents)
+        self.assertEqual(hashlib.sha256(database.read_bytes()).hexdigest(), before)
+        state_path.write_text(json.dumps({"projectless-thread-ids": []}), encoding="utf-8")
+        sessions, _ = bridge.codex_sessions(self.home)
+        self.assertTrue(all(not s["projectless"] for s in sessions))
+
+    def test_codex_broken_projectless_state_keeps_sessions_and_is_not_overwritten(self):
+        self.database()
+        state_path = self.home / ".codex-global-state.json"
+        for contents in ("broken JSON", "[]", '{"projectless-thread-ids":{}}', '{"projectless-thread-ids":[{}]}'):
+            with self.subTest(contents=contents):
+                state_path.write_text(contents, encoding="utf-8")
+                sessions, warnings = bridge.codex_sessions(self.home)
+                self.assertEqual([s["id"] for s in sessions], [self.identifier])
+                self.assertFalse(sessions[0]["projectless"])
+                self.assertTrue(warnings)
+                self.assertEqual(state_path.read_text(encoding="utf-8"), contents)
+
+    def test_codex_unreadable_projectless_state_keeps_sessions(self):
+        self.database()
+        with patch.object(Path, "read_text", side_effect=PermissionError("read denied")):
+            sessions, warnings = bridge.codex_sessions(self.home)
+        self.assertEqual([s["id"] for s in sessions], [self.identifier])
+        self.assertFalse(sessions[0]["projectless"])
+        self.assertIn("read denied", warnings[0])
 
     def test_missing_database_does_not_create_one(self):
         sessions, warnings = bridge.codex_sessions(self.home)
