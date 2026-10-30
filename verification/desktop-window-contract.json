@@ -1,5 +1,7 @@
 {
   "date": "2026-10-30",
+  "historical_only": true,
+  "superseded_by": "session-open-verification.json",
   "timezone": "Asia/Seoul",
   "upstream_commit": "2ee0449d8721a2d32433ba8515667dcd5318b143",
   "overall": "single_local_existing_session_verified_for_both_providers",

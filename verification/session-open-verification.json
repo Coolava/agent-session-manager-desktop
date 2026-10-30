@@ -1,0 +1,72 @@
+{
+  "date": "2026-10-30",
+  "timezone": "Asia/Seoul",
+  "requirement": "Open the selected existing session in its Desktop app; no forced independent window",
+  "result": "passed",
+  "runtime": {
+    "method": "Go Wails App.Call -> Python metadata validation -> os.startfile",
+    "sessions_observed": 423,
+    "claude": {
+      "session_id": "local_1cc6efd8-153a-4169-aaf1-8344d05c508d",
+      "url": "claude://claude.ai/epitaxy/local_1cc6efd8-153a-4169-aaf1-8344d05c508d",
+      "result": "OS link dispatch passed"
+    },
+    "codex": {
+      "session_id": "01a18a2c-6acb-7a02-900a-2f32185afb9c",
+      "url": "codex://threads/01a18a2c-6acb-7a02-900a-2f32185afb9c",
+      "result": "OS link dispatch passed"
+    },
+    "live_test_seconds": 2.68,
+    "app_screen_transition_asserted": false
+  },
+  "checks": {
+    "desktop_windows_build": "passed",
+    "python_tests": {
+      "passed": 9,
+      "failed": 0
+    },
+    "browser_ui_tests": {
+      "passed": 7,
+      "failed": 0
+    },
+    "svelte_check": {
+      "errors": 0,
+      "preexisting_warnings": 111
+    },
+    "desktop_go_test": "passed",
+    "desktop_go_vet": "passed",
+    "ui_preview": "desktop-ui-preview.png",
+    "ui_minimum_size": "desktop-ui-minimum.png",
+    "ui_images_use_fixture_data": true
+  },
+  "runtime_dependencies_not_used": [
+    "Computer Use",
+    "Windows UI Automation",
+    "C# window helper",
+    "Claude window-opening plugin",
+    "terminal multiplexer"
+  ],
+  "preserved": {
+    "existing_python_project": true,
+    "installed_desktop_files": true,
+    "conversation_source_data": true,
+    "no_model_prompt_submitted": true
+  },
+  "limitations": [
+    "OS link dispatch is not proof of a completed Desktop screen transition.",
+    "Codex live activity is not connected and is shown as unknown.",
+    "Live dispatch tests cover local existing sessions; Claude SSH uses the existing module but was not live-tested in this task.",
+    "New conversations, cloud sessions and Codex remote host routing are outside this implementation."
+  ],
+  "upstream_baseline": {
+    "frontend_tests": {
+      "passed": 984,
+      "failed": 24,
+      "reproduced_twice": true
+    },
+    "windows_go_test": "Original root/dictation build requires missing pkg-config/PortAudio; separate Desktop entrypoint passes.",
+    "changes_to_unrelated_upstream_tests": false
+  },
+  "build_sha256": "f78a9b387eb77763014394280e163d852a1a58cf07a03b1d16713bbc786e1d1f",
+  "source_commit": "8025fe0"
+}
