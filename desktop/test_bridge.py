@@ -18,6 +18,9 @@ class DesktopBridgeTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name)
         self.identifier = "00000000-0000-4000-8000-000000000001"
+        groups = patch.object(bridge, "read_claude_groups", return_value=({}, []), create=True)
+        self.source_groups = groups.start()
+        self.addCleanup(groups.stop)
 
     def database(self, version=5):
         path = self.home / f"state_{version}.sqlite"
@@ -251,6 +254,24 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertEqual(warnings, [])
         for path in self.home.glob("*/*/*.json"):
             self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+    def test_claude_original_group_is_scoped_and_keeps_original_session_identity(self):
+        manager = self.manager()
+        original = manager.list_sessions.return_value[0]
+        self.source_groups.return_value = ({("account/organization", original.id): {"id": "cg-1", "name": "Improve_Workflow"},
+                                           ("other/organization", original.id): {"id": "cg-1", "name": "Wrong account"}}, [])
+        sessions, warnings = bridge.claude_sessions(manager)
+        self.assertEqual(sessions[0].get("claudeGroup"), {"id": "cg-1", "name": "Improve_Workflow"})
+        self.assertEqual(sessions[0]["cwd"], original.origin_cwd)
+        self.assertEqual(sessions[0]["member"], ["claude", "account:organization", original.id])
+        self.assertEqual(warnings, [])
+        with patch.object(bridge.os, "startfile", create=True) as start:
+            bridge.dispatch({"action": "open", "key": sessions[0]["key"]}, manager)
+        start.assert_called_once_with("claude://claude.ai/epitaxy/" + original.id)
+        self.source_groups.return_value = ({}, ["Source group read failed"])
+        sessions, warnings = bridge.claude_sessions(manager)
+        self.assertFalse(sessions[0].get("claudeGroup"))
+        self.assertIn("Source group read failed", warnings)
 
     def test_broken_groups_are_reported_and_never_overwritten(self):
         path = self.home / "groups.json"

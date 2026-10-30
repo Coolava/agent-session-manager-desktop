@@ -9,6 +9,7 @@ async function setup(page, options = {}) {
       ...(options.extraSessions ?? []),
     ];
     const groups = [];
+    window.desktopSessions = sessions;
     window.extraActivities = Object.fromEntries(Object.entries(options.childStates ?? {}).map(([key, state]) => [key, { state, detail: 'Child response', observed_at: Date.now() / 1000 }]));
     window.desktopCalls = [];
     window.go = { main: { App: { Call: async request => {
@@ -275,6 +276,63 @@ test('Codex project roots combine worktrees with Claude while retaining original
   await page.getByRole('button', { name: /Codex Desktop에서 열기/ }).click();
   await expect(page.getByRole('status')).toContainText('세션 열기를 요청했습니다');
   expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([{ action: 'open', key: 'worktree-one' }]);
+});
+
+test('Claude source groups stay separate from Codex projects, folders and other account groups', async ({ page }) => {
+  const common = { provider: 'claude', environment: 'local', host: 'local', lastActivity: 1793300000000, cwd: 'C:/Users/test' };
+  await setup(page, { extraSessions: [
+    { ...common, key: 'migration', member: ['claude', 'account:org', 'migration'], id: 'migration', title: 'sp-workflow migration', claudeGroup: { id: 'cg-1', name: 'Improve_Workflow' } },
+    { ...common, key: 'compression', member: ['claude', 'account:org', 'compression'], id: 'compression', title: 'Workflow compression', claudeGroup: { id: 'cg-1', name: 'Improve_Workflow' } },
+    { ...common, key: 'other-account', member: ['claude', 'other:org', 'other-account'], id: 'other-account', title: 'Other account work', claudeGroup: { id: 'cg-1', name: 'Improve_Workflow' } },
+    { ...common, key: 'other-group', member: ['claude', 'account:org', 'other-group'], id: 'other-group', title: 'Other group work', claudeGroup: { id: 'cg-2', name: 'Improve_Workflow' } },
+    { ...common, key: 'scratch-group', member: ['claude', 'account:org', 'scratch-group'], id: 'scratch-group', title: 'Grouped scratch work', cwd: 'C:/Claude/scratch-workspaces/account/org/scratch-test', claudeGroup: { id: 'cg-1', name: 'Improve_Workflow' } },
+    { ...common, key: 'codex-same-name', member: ['codex', 'local', 'codex-same-name'], id: 'codex-same-name', provider: 'codex', title: 'Codex project work', cwd: 'F:/worktrees/one', projectCwd: 'D:/Improve_Workflow' },
+    { ...common, key: 'folder-same-name', member: ['claude', 'account:org', 'folder-same-name'], id: 'folder-same-name', title: 'Ordinary folder work', cwd: 'D:/Improve_Workflow' },
+  ] });
+  const sourceGroups = page.locator('.claude-group-row');
+  await expect(sourceGroups).toHaveCount(3);
+  await expect(page.locator('.path-row').filter({ hasText: 'test' })).toHaveCount(0);
+  await sourceGroups.first().click();
+  await expect(page.locator('.session-row')).toHaveCount(3);
+  await expect(page.locator('.session-row')).toContainText(['sp-workflow migration', 'Workflow compression', 'Grouped scratch work']);
+  await expect(page.locator('.group-tools')).toHaveCount(0);
+  await page.getByRole('textbox', { name: '세션 검색' }).fill('Improve_Workflow migration');
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(sourceGroups.first()).toHaveClass(/active/);
+  await expect(page.locator('.session-row')).toHaveCount(1);
+  await showDetails(page, page.locator('.session-row'));
+  await expect(page.locator('dd').first()).toHaveText('C:/Users/test');
+  await expect(page.locator('.detail-card')).toContainText('Improve_Workflow');
+  await page.getByRole('button', { name: /Claude Desktop에서 열기/ }).click();
+  await expect(page.getByRole('status')).toContainText('세션 열기를 요청했습니다');
+  expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([{ action: 'open', key: 'migration' }]);
+  await page.getByRole('button', { name: '← 세션 목록' }).click();
+  await page.getByRole('textbox', { name: '세션 검색' }).fill('');
+  await sourceGroups.nth(1).click();
+  await expect(page.locator('.session-row')).toHaveCount(1);
+  await expect(page.locator('.session-row')).toContainText('Other account work');
+  await page.locator('.path-row').filter({ hasText: 'Improve_Workflow' }).click();
+  await expect(page.locator('.session-row')).toHaveCount(2);
+  await expect(page.locator('.session-row')).toContainText(['Codex project work', 'Ordinary folder work']);
+  await sourceGroups.first().click();
+  await page.screenshot({ path: '../verification/desktop-claude-source-groups.png' });
+  await page.evaluate(() => { window.desktopSessions.forEach(session => { if (session.provider === 'claude') delete session.claudeGroup; }); });
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(sourceGroups).toHaveCount(0);
+  await expect(page.locator('.path-row').filter({ hasText: 'test' })).toHaveCount(1);
+  await expect(page.locator('.session-row')).toHaveCount(9);
+});
+
+test('explicit child Claude groups override the parent classification while keeping tree context', async ({ page }) => {
+  await setup(page, { extraSessions: childSessions.map((session, index) => index === 0 ? { ...session, claudeGroup: { id: 'cg-child', name: 'Child review' } } : session), initialRows: 2 });
+  await page.locator('.claude-group-row').filter({ hasText: 'Child review' }).click();
+  await expect(page.locator('.session-row')).toHaveCount(2);
+  await expect(page.locator('[data-session-key="child-aw"]')).toBeVisible();
+  await expect(page.locator('[data-session-key="child-wf"]')).toHaveCount(0);
+  await page.locator('.path-row').filter({ hasText: 'Inspector' }).click();
+  await page.locator('[data-session-key="claude-key"] .tree-toggle').click();
+  await expect(page.locator('[data-session-key="child-wf"]')).toBeVisible();
+  await expect(page.locator('[data-session-key="child-aw"]')).toHaveCount(0);
 });
 
 test('ordinary scratch projects, Codex and SSH remain separate folders', async ({ page }) => {

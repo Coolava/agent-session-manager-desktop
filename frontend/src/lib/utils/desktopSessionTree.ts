@@ -2,6 +2,7 @@ export type DesktopSession = {
   key: string; member: string[]; provider: string; id: string; title: string; cwd: string;
   environment: string; host: string; lastActivity: number; projectless?: boolean; projectCwd?: string;
   parentKey?: string | null; childName?: string;
+  claudeGroup?: { id: string; name: string } | null;
 };
 
 export type SessionNode = {
@@ -62,7 +63,7 @@ export function sessionTreeRows(
   for (const node of tree.byKey.values()) {
     if (!scopedKeys.has(node.session.key)) continue;
     const session = node.session;
-    const text = [session.title, session.childName, session.cwd, session.projectCwd, session.host, session.id, session.provider, session.environment].join(' ').toLowerCase();
+    const text = [session.title, session.childName, session.cwd, session.projectCwd, session.claudeGroup?.name, session.host, session.id, session.provider, session.environment].join(' ').toLowerCase();
     if (!words.every(word => text.includes(word))) continue;
     includeAncestors(node);
     if (words.length) {

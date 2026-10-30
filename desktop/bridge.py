@@ -14,6 +14,7 @@ sys.path.insert(0, str(MODULE_ROOT))
 from session_manager import ManagerError, SessionManager
 from session_manager.groups import GroupStore
 from codex_activity import codex_activities
+from claude_groups import read_groups as read_claude_groups
 
 
 def codex_home():
@@ -101,6 +102,7 @@ def codex_sessions(home=None):
 
 
 def claude_sessions(manager):
+    source_groups, warnings = read_claude_groups()
     result = []
     for session in manager.list_sessions():
         if session.environment not in ("local", "ssh"):
@@ -112,8 +114,9 @@ def claude_sessions(manager):
                        "environment": session.environment, "host": (session.ssh.host + (f":{session.ssh.port}" if session.ssh.port != 22 else "")) if session.ssh else "local",
                        "account": session.account_id, "organization": session.organization_id, "lastActivity": session.last_activity_at,
                        "parentKey": json.dumps(parent, separators=(",", ":")) if parent else None,
-                       "childName": session.side_session_name})
-    return result, [str(warning) for warning in manager.store.warnings]
+                       "childName": session.side_session_name,
+                       "claudeGroup": source_groups.get((session.account_id + "/" + session.organization_id, session.id))})
+    return result, [str(warning) for warning in manager.store.warnings] + warnings
 
 
 def group_store():
