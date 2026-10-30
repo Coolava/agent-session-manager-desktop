@@ -6,6 +6,7 @@ async function setup(page, options = {}) {
     const sessions = [
       { key: 'claude-key', member: ['claude', 'account', 'claude-id'], provider: 'claude', id: 'claude-id', title: 'Workflow validation', cwd: 'D:/Projects/Inspector', environment: 'ssh', host: 'build-host', lastActivity: 1793300000000 },
       { key: 'codex-key', member: ['codex', 'local', 'codex-id'], provider: 'codex', id: 'codex-id', title: 'Session manager UI', cwd: 'D:/Projects/SessionManager', environment: 'local', host: 'local', lastActivity: 1793290000000 },
+      ...(options.extraSessions ?? []),
     ];
     const groups = [];
     window.desktopCalls = [];
@@ -26,7 +27,7 @@ async function setup(page, options = {}) {
     } } } };
   }, options);
   await page.goto('/desktop.html');
-  await expect(page.locator('.session-row')).toHaveCount(2);
+  await expect(page.locator('.session-row')).toHaveCount(2 + (options.extraSessions?.length ?? 0));
 }
 
 test('provider and search filters are preserved across refresh', async ({ page }) => {
@@ -129,4 +130,47 @@ test('dashboard preview', async ({ page }) => {
   await setup(page);
   await expect(page.locator('.badge.working')).toHaveCount(1);
   await page.screenshot({ path: '../verification/desktop-ui-preview.png' });
+});
+
+test('Claude scratch workspaces share this computer and retain search, refresh and opening', async ({ page }) => {
+  const scratchSessions = [
+    { key: 'scratch-one', member: ['claude', 'account', 'scratch-one'], provider: 'claude', id: 'scratch-one', title: 'Local planning', cwd: 'C:/Users/test/AppData/Roaming/Claude/scratch-workspaces/account/org/scratch-2026-10-29-one', environment: 'local', host: 'local', lastActivity: 1793300000000 },
+    { key: 'scratch-two', member: ['claude', 'account', 'scratch-two'], provider: 'claude', id: 'scratch-two', title: 'Local research', cwd: 'F:\\Claude\\AppDataRoaming-Claude\\SCRATCH-WORKSPACES\\account\\org\\scratch-2026-10-30-two\\', environment: 'local', host: 'local', lastActivity: 1793290000000 },
+  ];
+  await setup(page, { extraSessions: scratchSessions });
+  const computer = page.locator('.path-row').filter({ hasText: '이 컴퓨터' });
+  await expect(computer).toHaveCount(1);
+  await expect(page.locator('.path-row')).toHaveCount(3);
+  await expect(page.locator('.projects')).not.toContainText('scratch-2026');
+  await computer.click();
+  await expect(page.locator('.session-row')).toHaveCount(2);
+  await expect(page.locator('.session-row')).toContainText(['Local planning', 'Local research']);
+  await page.screenshot({ path: '../verification/desktop-computer-workspaces.png' });
+  await page.getByRole('textbox', { name: '세션 검색' }).fill('research');
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(computer).toHaveClass(/active/);
+  await expect(page.locator('.session-row')).toHaveCount(1);
+  await expect(page.locator('.session-row')).toContainText('Local research');
+  await page.locator('.session-row').click();
+  await expect(page.locator('dd').first()).toHaveText(scratchSessions[1].cwd);
+  await page.getByRole('button', { name: /Claude Desktop에서 열기/ }).click();
+  await expect(page.getByRole('status')).toContainText('세션 열기를 요청했습니다');
+  expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([{ action: 'open', key: 'scratch-two' }]);
+});
+
+test('ordinary scratch projects, Codex and SSH remain separate folders', async ({ page }) => {
+  const scratchPath = 'C:/Users/test/AppData/Roaming/Claude/scratch-workspaces/account/org/scratch-internal';
+  const extraSessions = [
+    { key: 'ordinary', member: ['claude', 'account', 'ordinary'], provider: 'claude', id: 'ordinary', title: 'Ordinary project', cwd: 'D:/Projects/scratch-project', environment: 'local', host: 'local', lastActivity: 1793300000000 },
+    { key: 'codex-scratch', member: ['codex', 'local', 'codex-scratch'], provider: 'codex', id: 'codex-scratch', title: 'Codex scratch', cwd: scratchPath, environment: 'local', host: 'local', lastActivity: 1793300000000 },
+    { key: 'ssh-scratch', member: ['claude', 'account', 'ssh-scratch'], provider: 'claude', id: 'ssh-scratch', title: 'SSH scratch', cwd: scratchPath, environment: 'ssh', host: 'build-host', lastActivity: 1793300000000 },
+  ];
+  await setup(page, { extraSessions });
+  await expect(page.locator('.path-row')).toHaveCount(5);
+  await expect(page.locator('.path-row').filter({ hasText: '이 컴퓨터' })).toHaveCount(0);
+  for (const session of extraSessions) {
+    await page.locator('.path-row').filter({ hasText: session.environment === 'ssh' ? 'scratch-internal · build-host' : session.provider === 'codex' ? /scratch-internal$/ : 'scratch-project' }).click();
+    await expect(page.locator('.session-row')).toHaveCount(1);
+    await expect(page.locator('.session-row')).toContainText(session.title);
+  }
 });

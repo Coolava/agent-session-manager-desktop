@@ -92,7 +92,12 @@
   }
 
   function contains(group: Group, session: Session) { return group.members.some(member => JSON.stringify(member) === JSON.stringify(session.member)); }
-  function projectKey(session: Session) { return JSON.stringify([session.environment, session.host, session.cwd]); }
+  function isComputerWorkspace(session: Session) {
+    return session.provider === 'claude' && session.environment === 'local'
+      && /(?:^|[\\/])scratch-workspaces[\\/][^\\/]+[\\/][^\\/]+[\\/]scratch-[^\\/]+[\\/]?$/i.test(session.cwd);
+  }
+  function projectKey(session: Session) { return JSON.stringify(isComputerWorkspace(session) ? ['claude-scratch', session.environment, session.host] : [session.environment, session.host, session.cwd]); }
+  function projectLabel(session: Session) { return isComputerWorkspace(session) ? '이 컴퓨터' : folder(session.cwd) + (session.environment === 'ssh' ? ` · ${session.host}` : ''); }
   function folder(path: string) { return path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path || '작업 폴더 없음'; }
   function date(value: number) { return value ? new Date(value).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '기록 없음'; }
 
@@ -148,7 +153,7 @@
       <details class="projects" open>
         <summary class="sidebar-label spaced">PROJECT FOLDERS <span>{paths.length}</span></summary>
         {#each paths as project}
-          <button class="nav-row path-row" class:active={scope === `path:${projectKey(project)}`} title={`${project.host} · ${project.cwd}`} on:click={() => { scope = `path:${projectKey(project)}`; selectedKey = ''; }}><span class="folder-icon">▱</span><span>{folder(project.cwd)}{project.environment === 'ssh' ? ` · ${project.host}` : ''}</span></button>
+          <button class="nav-row path-row" class:active={scope === `path:${projectKey(project)}`} title={isComputerWorkspace(project) ? 'Claude · 이 컴퓨터' : `${project.host} · ${project.cwd}`} on:click={() => { scope = `path:${projectKey(project)}`; selectedKey = ''; }}><span class="folder-icon">▱</span><span>{projectLabel(project)}</span></button>
         {/each}
       </details>
       <div class="sidebar-footer"><span class="connection-dot"></span> Local desktop connections</div>
