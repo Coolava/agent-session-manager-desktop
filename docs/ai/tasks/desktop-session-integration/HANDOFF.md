@@ -2,40 +2,44 @@
 
 - 일자: 2026-10-30 (Asia/Seoul)
 - 스킬: software-change-workflow
-- 현재 단계: Step 1 로컬 기존 세션 검증 완료. Step 2 최소 UI 연결 준비.
-- 사용자 결정: Codex 독립 창 필수. 기존 창 이동 대안 불허.
+- 현재 단계: 완료
+- 최종 사용자 결정: 새 창을 강제로 만들지 않고 해당 Desktop 앱에서 세션만 연다. Computer Use를 사용하지 않는다.
 
-## 완료
+## 구현
 
-- 별도 저장소 clone, upstream 커밋 고정 및 desktop-session-integration 브랜치 생성.
-- npm ci --ignore-scripts 완료.
-- 원본 npm run build 통과.
-- 원본 npm run check: 오류 0개, 기존 경고 111개 / 29개 파일.
-- 공식 Go 배포에서 Go 1.27.3을 .tools에 준비하고 SHA-256 대조 완료. 전역 설치/설정 변경 없음.
-- 원본 Wails/터미널 의존성 및 기존 Claude Python 모듈 조사.
-- Codex 설치 번들 읽기 전용 조사: OS 링크 처리와 내부 별도 창 메시지 분리를 확인. verification/desktop-window-contract.json 참조.
+- D:/repos/intellian/Session_Manager_Desktop에 별도 clone, desktop-session-integration 브랜치.
+- 기존 Wails/Svelte를 활용한 Desktop 전용 실행 파일. 원본 CSS 토큰과 아이콘 재사용.
+- 실제 Claude/Codex 목록, 검색, provider/환경/호스트/폴더 필터, 최근 활동 순 표시.
+- 현재 메타데이터에서 선택 ID를 확인한 뒤 Claude/Codex URL을 Windows로 전달.
+- 관리자 전용 그룹 생성/이름 변경/삭제/추가/제외. 손상 파일은 편집 중지.
+- Claude 상태는 기존 모듈을 재사용하고 오래된 관찰을 확인 불가로 표시. Codex 실시간 상태는 미연동으로 명시.
+- 창 강제 생성용 C# 소스와 실행 파일을 제거했다. 최종 실행 경로는 UI 자동화, Computer Use, 창 열기용 Claude 플러그인에 의존하지 않는다.
+- 기존 D:/repos/intellian/Session_Manager와 설치된 앱/대화 원본은 수정하지 않았다.
 
-## 검증 상태
+## 실행
 
-- npm test: 두 번 동일하게 1008개 중 984 통과, 24 실패. Windows의 URL.pathname/ESM import/구분자 및 Unix grep 사용을 확인했다. 원본 테스트/제품은 수정하지 않았다. .tools/upstream-frontend-test.log 및 재실행 로그 참조.
-- go test ./...: PortAudio가 pkg-config를 찾지 못해 루트/음성 패키지 빌드 실패. 원본 CI는 MSYS2 UCRT64 GCC/pkgconf/PortAudio를 사용한다. 제품 소스 결함으로 판정하지 않음.
-- go test ./session에서 sh를 가정한 테스트가 실패했다. 같은 테스트를 재현한 뒤 해당 명령의 PATH에만 Git의 bin/usr/bin을 추가하면 통과함을 확인했다.
-- Codex: C# System.Windows.Automation에서 파일 메뉴의 새 창 InvokePattern 후 공식 대화 링크를 전달했다. 새 HWND 1574424가 생기고 기존 HWND 1246974와 같은 대상 문서 제목이 표시됨을 확인했다.
-- Claude: 기존 브리지가 지정한 세션 ID의 성공 응답을 반환하고 해당 제목의 독립 HWND 5638184가 존재함을 확인했다.
-- Computer Use는 사용자 지시에 따라 중단했다. 이후 검증은 네이티브 API만 사용했다. 설치 파일/보안 설정/메시지 본문은 변경하지 않았다.
+루트 Start Desktop Manager.cmd 또는 desktop/build/bin/desktop-session-manager.exe.
+빌드는 scripts/build-desktop.ps1. Python 모듈 위치는 기본적으로 나란한 ../Session_Manager이며 SESSION_MANAGER_PYTHON_ROOT로 지정 가능하다. 자세한 의존성과 범위는 desktop/README.md 참조.
 
-## 변경 범위
+## 최종 검증
 
-- .gitignore에 /.tools/ 추가: 로컬 빌드 도구와 로그만 제외한다.
-- 작업 문서와 검증 근거 추가.
-- 제품 소스/테스트/의존성 버전 및 설치된 Desktop 앱/대화 원본 변경 없음.
-- 기존 D:/repos/intellian/Session_Manager는 수정하지 않음.
+- Desktop 전용 Windows 빌드 통과.
+- Python 9개 테스트 통과: 읽기 전용 DB/버전 선택, 내부 스레드 제외, provider 키 분리, 위조 ID 차단, 손상 그룹 보존, 정확한 두 앱 URL.
+- 브라우저 7개 통과: 검색/필터 유지, 열기 실패/중복 입력 방지, 그룹 수명주기, 15초 상태 만료, 손상 그룹 편집 중지, 960×640/1380×880 화면.
+- npm run check: 오류 0, 원본 경고 111 / 29파일. 새 화면의 경고 없음.
+- desktop의 go test/go vet 통과.
+- 명시적 live integration 검사에서 423개 세션 조회 및 Claude/Codex의 실제 URL 전달 통과. OS 전달 검증이며 화면 전환 완료 보장은 아니다.
+- 현재 근거: verification/session-open-verification.json. 초기 독립 창 실험은 historical_only인 desktop-window-contract.json에 보존.
 
-## 미결 사항과 다음 작업
+## 원본 기준선 실패
 
-1. 검증한 Codex 네이티브 메뉴+URI 경로를 타임아웃, 새 HWND 확인, 대상 문서 확인이 있는 helper로 정리한다.
-2. 기존 Claude Python 모듈을 재사용하는 Desktop bridge와 원본 스타일의 최소 UI를 연결한다.
-3. 원본 전체 Windows 빌드가 필요하면 CI와 같은 UCRT64/PortAudio 도구 체인을 준비한다.
-4. Step 1을 통과한 뒤에만 Step 2를 진행한다. 기존 창 이동이나 대화 복제를 독립 창 구현으로 보고하지 않는다.
+- 원본 npm test는 두 번 동일하게 1008개 중 984통과, 24실패. Windows URL/ESM/경로 구분자 및 Unix grep 사용을 확인했다.
+- 원본 go test ./...는 PortAudio의 pkg-config 부재로 루트/음성 패키지 빌드 실패. session 패키지의 sh 가정 실패는 Git bin/usr/bin을 해당 명령 PATH에만 추가하면 통과했다.
+- 무관한 원본 소스/테스트/의존성 버전은 수정하지 않았다. Desktop 전용 진입점은 이 음성 패키지를 연결하지 않으므로 별도로 빌드 가능하다.
 
-Codex 설치 파일 수정이나 원격 디버깅으로 앱 내부 함수를 주입하는 접근은 선택하지 않았다. 외부 연동 가능성 미확보를 확정적인 불가능 판정으로 확대하지 않는다.
+## 남은 제품 한계
+
+- Codex 실시간 실행 상태 미연동.
+- 실제 링크 전달 검증은 로컬 기존 세션 대상. Claude SSH는 기존 기능 재사용, 새 대화/클라우드/Codex 원격은 범위 밖.
+- Desktop URL/저장 구조가 업데이트로 바뀌면 재검증 필요.
+- 이번 요청의 미완료 구현 단계는 없다. 추가 확장은 별도 요청으로 진행한다.

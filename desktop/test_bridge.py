@@ -1,0 +1,114 @@
+import hashlib
+from contextlib import closing
+import json
+from pathlib import Path
+import sqlite3
+import tempfile
+import unittest
+from unittest.mock import Mock, patch
+
+import bridge
+from session_manager.models import Session
+
+
+class DesktopBridgeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name)
+        self.identifier = "00000000-0000-4000-8000-000000000001"
+
+    def database(self, version=5):
+        path = self.home / f"state_{version}.sqlite"
+        with closing(sqlite3.connect(path)) as connection, connection:
+            connection.execute("CREATE TABLE threads(id TEXT, title TEXT, name TEXT, cwd TEXT, updated_at INTEGER, recency_at_ms INTEGER, archived INTEGER)")
+            connection.execute("INSERT INTO threads VALUES(?,?,?,?,?,?,?)", (self.identifier, "Original request", "Desktop title", r"\\?\D:\project", 123, None, 0))
+            connection.execute("INSERT INTO threads VALUES(?,?,?,?,?,?,?)", ("00000000-0000-4000-8000-000000000002", "Archived", None, "D:/project", 456, None, 1))
+        return path
+
+    def manager(self):
+        manager = Mock()
+        manager.list_sessions.return_value = [Session("local_" + self.identifier, self.identifier, "Claude conversation", "local", "D:/project", "D:/project", False, 456000, "account", "organization")]
+        manager.store.warnings = []
+        return manager
+
+    def test_codex_uses_desktop_name_and_preserves_database(self):
+        path = self.database()
+        before = hashlib.sha256(path.read_bytes()).hexdigest()
+        sessions, warnings = bridge.codex_sessions(self.home)
+        self.assertEqual(len(sessions), 1)
+        self.assertEqual(sessions[0]["title"], "Desktop title")
+        self.assertEqual(sessions[0]["cwd"], r"D:\project")
+        self.assertEqual(sessions[0]["lastActivity"], 123000)
+        self.assertEqual(warnings, [])
+        self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before)
+
+    def test_missing_database_does_not_create_one(self):
+        sessions, warnings = bridge.codex_sessions(self.home)
+        self.assertEqual(sessions, [])
+        self.assertTrue(warnings)
+        self.assertEqual(list(self.home.iterdir()), [])
+
+    def test_internal_subagents_and_guardian_reviews_are_not_desktop_chats(self):
+        path = self.database()
+        with closing(sqlite3.connect(path)) as connection, connection:
+            connection.execute("ALTER TABLE threads ADD COLUMN thread_source TEXT")
+            connection.execute("UPDATE threads SET thread_source = 'user'")
+            for kind in ("subagent", "guardian_review"):
+                connection.execute("INSERT INTO threads(id,title,cwd,updated_at,archived,thread_source) VALUES(?,?,?,?,?,?)", ("00000000-0000-4000-8000-000000000003", "Internal helper", "D:/project", 999, 0, kind))
+        sessions, _ = bridge.codex_sessions(self.home)
+        self.assertEqual([s["title"] for s in sessions], ["Desktop title"])
+
+    def test_latest_numeric_schema_is_selected(self):
+        self.database(5)
+        newest = self.database(10)
+        with closing(sqlite3.connect(newest)) as connection, connection:
+            connection.execute("UPDATE threads SET name = 'New schema'")
+        sessions, _ = bridge.codex_sessions(self.home)
+        self.assertEqual(sessions[0]["title"], "New schema")
+
+    def test_claude_open_is_independent_of_broken_codex_metadata(self):
+        manager = self.manager()
+        key = bridge.claude_sessions(manager)[0][0]["key"]
+        with patch.object(bridge, "codex_sessions", side_effect=sqlite3.DatabaseError("corrupt")), patch.object(bridge.os, "startfile", create=True) as start:
+            result = bridge.dispatch({"action": "open", "key": key}, manager)
+        start.assert_called_once_with("claude://claude.ai/epitaxy/local_" + self.identifier)
+        self.assertTrue(result["requested"])
+        manager.open_session.assert_not_called()
+
+    def test_codex_open_dispatches_only_the_validated_thread_link(self):
+        self.database()
+        with patch.object(bridge, "codex_home", return_value=self.home), patch.object(bridge.os, "startfile", create=True) as start:
+            session = bridge.codex_sessions()[0][0]
+            result = bridge.dispatch({"action": "open", "key": session["key"]}, self.manager())
+        start.assert_called_once_with("codex://threads/" + self.identifier)
+        self.assertEqual(result["session_id"], self.identifier)
+
+    def test_forged_or_stale_session_cannot_dispatch_a_link(self):
+        with patch.object(bridge, "codex_sessions", return_value=([], [])), patch.object(bridge.os, "startfile", create=True) as run:
+            with self.assertRaises(ValueError):
+                bridge.dispatch({"action": "open", "key": json.dumps(["codex", "local", "$(unexpected)"])}, self.manager())
+        run.assert_not_called()
+
+    def test_identical_ids_across_providers_do_not_share_group_membership(self):
+        self.database()
+        with patch.object(bridge, "codex_home", return_value=self.home):
+            snapshot = bridge.snapshot(self.manager())
+        keys = [session["key"] for session in snapshot["sessions"]]
+        self.assertEqual(len(keys), 2)
+        self.assertEqual(len(set(keys)), 2)
+
+    def test_broken_groups_are_reported_and_never_overwritten(self):
+        path = self.home / "groups.json"
+        path.write_text("broken groups", encoding="utf-8")
+        with patch.object(bridge, "group_store", return_value=bridge.GroupStore(path)), patch.object(bridge, "codex_sessions", return_value=([], [])):
+            snapshot = bridge.snapshot(self.manager())
+            self.assertTrue(snapshot["groupError"])
+            self.assertEqual(len(snapshot["sessions"]), 1)
+            with self.assertRaises(bridge.ManagerError):
+                bridge.dispatch({"action": "create-group", "name": "Should not overwrite"}, self.manager())
+        self.assertEqual(path.read_text(encoding="utf-8"), "broken groups")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,6 +1,10 @@
 build/bin
 node_modules
 /.tools/
+/desktop/assets/
+/desktop/build/
+/desktop/wailsjs/
+/desktop/__pycache__/
 frontend/dist
 frontend/test-results/
 frontend/playwright-report/
