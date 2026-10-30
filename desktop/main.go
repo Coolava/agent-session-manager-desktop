@@ -36,7 +36,7 @@ func (a *App) Call(request map[string]interface{}) (interface{}, error) {
 			return nil, fmt.Errorf("세션 열기가 진행 중입니다. 완료될 때까지 기다려 주세요.")
 		}
 		defer a.opening.Unlock()
-	} else if action != "snapshot" && action != "activities" {
+	} else if action != "snapshot" && action != "activities" && action != "codex-activities" {
 		a.groups.Lock()
 		defer a.groups.Unlock()
 	}

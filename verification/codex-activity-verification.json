@@ -1,0 +1,41 @@
+{
+  "date": "2026-10-30",
+  "timezone": "Asia/Seoul",
+  "result": "passed",
+  "method": "Read-only Codex thread_history SQLite latest turn; current Windows runtime-start guard",
+  "live": {
+    "sessions": 303,
+    "states": {
+      "completed": 282,
+      "interrupted": 19,
+      "unknown": 1,
+      "working": 1
+    },
+    "current_thread": "01a18a2c-6acb-7a02-900a-2f32185afb9c",
+    "current_state": "working",
+    "source": "codex_history"
+  },
+  "checks": {
+    "python_tests": 19,
+    "browser_tests": 9,
+    "type_errors": 0,
+    "preexisting_type_warnings": 111,
+    "desktop_build": "passed",
+    "go_test": "passed",
+    "go_vet": "passed",
+    "go_live_activity": "passed"
+  },
+  "preserved": {
+    "conversation_data": true,
+    "installed_apps": true,
+    "no_model_prompt_sent": true,
+    "no_computer_use": true
+  },
+  "limitations": [
+    "Completion means the latest response ended normally, not that all user work is finished.",
+    "Persisted inProgress is guarded against older runtimes, but an unrecorded interruption in the same engine lifetime may remain in progress.",
+    "The internal history schema is version-dependent; unsupported schemas return unknown."
+  ],
+  "official_status_reference": "https://learn.chatgpt.com/docs/app-server",
+  "build_sha256": "4f392fb128c4a2bcbc625886960996fcb24bb2d6ed5e1bee40694da2b406ac37"
+}

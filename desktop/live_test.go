@@ -65,3 +65,31 @@ func TestLiveDesktopBridge(t *testing.T) {
 	}
 	t.Logf("Dispatched Codex Desktop session: %s", thread)
 }
+
+func TestLiveCodexActivity(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &App{ctx: context.Background(), root: root}
+	result, err := app.Call(map[string]interface{}{"action": "codex-activities"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activities := result.(map[string]interface{})
+	if len(activities) == 0 {
+		t.Fatal("No Codex activity observations returned")
+	}
+	t.Logf("Codex activity observations: %d", len(activities))
+	if thread := os.Getenv("DESKTOP_ACTIVITY_SMOKE_THREAD"); thread != "" {
+		key, err := json.Marshal([]string{"codex", "local", thread})
+		if err != nil {
+			t.Fatal(err)
+		}
+		activity := activities[string(key)].(map[string]interface{})
+		if activity["state"] != "working" {
+			t.Fatalf("Expected active test thread, got %v", activity)
+		}
+		t.Log("Current active thread is working")
+	}
+}

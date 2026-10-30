@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
 
-async function setup(page) {
-  await page.addInitScript(() => {
+async function setup(page, options = {}) {
+  await page.addInitScript(options => {
+    window.claudePending = options.claudePending;
     const sessions = [
       { key: 'claude-key', member: ['claude', 'account', 'claude-id'], provider: 'claude', id: 'claude-id', title: 'Workflow validation', cwd: 'D:/Projects/Inspector', environment: 'ssh', host: 'build-host', lastActivity: 1793300000000 },
       { key: 'codex-key', member: ['codex', 'local', 'codex-id'], provider: 'codex', id: 'codex-id', title: 'Session manager UI', cwd: 'D:/Projects/SessionManager', environment: 'local', host: 'local', lastActivity: 1793290000000 },
@@ -11,7 +12,11 @@ async function setup(page) {
     window.go = { main: { App: { Call: async request => {
       window.desktopCalls.push(request);
       if (request.action === 'snapshot') return { sessions, groups, warnings: [], groupError: window.groupFailure ? 'Broken groups' : '' };
-      if (request.action === 'activities') return { 'claude-key': { state: 'completed', detail: 'Main response completed', observed_at: Date.now() / 1000 } };
+      if (request.action === 'activities') {
+        if (window.claudePending) return new Promise(() => {});
+        return { 'claude-key': { state: 'completed', detail: 'Main response completed', observed_at: Date.now() / 1000 } };
+      }
+      if (request.action === 'codex-activities') return { 'codex-key': { state: window.codexState ?? 'working', detail: 'Codex turn state', observed_at: Date.now() / 1000 } };
       if (request.action === 'open') { await new Promise(resolve => setTimeout(resolve, 300)); if (window.openFailure) throw new Error('Desktop link failed'); return { requested: true }; }
       if (request.action === 'create-group') { const group = { id: 'group-1', name: request.name, members: [] }; groups.push(group); return group; }
       if (request.action === 'add-member') groups[0].members.push(sessions.find(s => s.key === request.key).member);
@@ -19,7 +24,7 @@ async function setup(page) {
       if (request.action === 'delete-group') groups.splice(0, groups.length);
       return groups;
     } } } };
-  });
+  }, options);
   await page.goto('/desktop.html');
   await expect(page.locator('.session-row')).toHaveCount(2);
 }
@@ -69,6 +74,7 @@ test('groups retain memberships across snapshot refresh', async ({ page }) => {
 
 test('Desktop dashboard fits the minimum window size', async ({ page }) => {
   await setup(page);
+  await expect(page.locator('.badge.working')).toHaveCount(1);
   await page.setViewportSize({ width: 960, height: 640 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(960);
   await page.screenshot({ path: '../verification/desktop-ui-minimum.png' });
@@ -85,6 +91,31 @@ test('old activity becomes unknown when automatic refresh is off', async ({ page
   await expect(page.locator('dd').last()).toContainText('15초 이상 지연');
 });
 
+test('Codex shows working, completion, and interruption independently of Claude', async ({ page }) => {
+  await setup(page, { claudePending: true });
+  const codex = page.locator('.session-row').filter({ hasText: 'Session manager UI' });
+  await expect(codex.locator('.badge')).toHaveText('작업 중');
+  await page.evaluate(() => { window.codexState = 'completed'; });
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(codex.locator('.badge')).toHaveText('완료');
+  await page.evaluate(() => { window.codexState = 'interrupted'; });
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(codex.locator('.badge')).toHaveText('중단');
+  await page.evaluate(() => { window.codexState = 'working'; });
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(codex.locator('.badge')).toHaveText('작업 중');
+});
+
+test('Codex observation expires without automatic refresh', async ({ page }) => {
+  await setup(page);
+  const codex = page.locator('.session-row').filter({ hasText: 'Session manager UI' });
+  await expect(codex.locator('.badge')).toHaveText('작업 중');
+  await page.getByRole('checkbox', { name: '자동 갱신 · 5초' }).uncheck();
+  await page.clock.install();
+  await page.clock.fastForward(16000);
+  await expect(codex.locator('.badge')).toHaveText('확인 불가');
+});
+
 test('a damaged group store disables editing while sessions remain visible', async ({ page }) => {
   await setup(page);
   await page.evaluate(() => { window.groupFailure = true; });
@@ -96,5 +127,6 @@ test('a damaged group store disables editing while sessions remain visible', asy
 
 test('dashboard preview', async ({ page }) => {
   await setup(page);
+  await expect(page.locator('.badge.working')).toHaveCount(1);
   await page.screenshot({ path: '../verification/desktop-ui-preview.png' });
 });

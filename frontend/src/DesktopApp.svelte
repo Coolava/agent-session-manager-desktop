@@ -8,21 +8,21 @@
   type Group = { id: string; name: string; members: string[][] };
   type Snapshot = { sessions: Session[]; groups: Group[]; warnings: string[]; groupError: string };
   type Activity = { state: string; detail: string; observed_at: number };
-  const labels: Record<string, string> = { working: '작업 중', completed: '완료', idle: 'Idle', not_running: '미실행', unknown: '확인 불가', error: '오류', refused: '응답 거절' };
+  const labels: Record<string, string> = { working: '작업 중', completed: '완료', interrupted: '중단', idle: 'Idle', not_running: '미실행', unknown: '확인 불가', error: '오류', refused: '응답 거절' };
   let sessions: Session[] = [];
   let groups: Group[] = [];
   let warnings: string[] = [];
   let groupError = '';
   let error = '';
   let refreshError = '';
-  let activityError = '';
+  let activityErrors = { claude: '', codex: '' };
   let notice = '';
   let query = '';
   let scope = 'all';
   let selectedKey = '';
   let loading = false;
   let opening = false;
-  let activityLoading = false;
+  let activityLoading = { claude: false, codex: false };
   let autoRefresh = true;
   let activities: Record<string, Activity> = {};
   let now = Date.now();
@@ -38,18 +38,20 @@
   }
 
   function activity(session: Session, timestamp: number): Activity {
-    if (session.provider === 'codex') return { state: 'unknown', detail: 'Codex의 실시간 실행 상태는 아직 연동되지 않았습니다.', observed_at: 0 };
     const observed = activities[session.key];
     if (!observed || timestamp / 1000 - observed.observed_at > 15) return { state: 'unknown', detail: '아직 상태를 확인하지 않았거나 마지막 관찰이 15초 이상 지연되었습니다.', observed_at: 0 };
     return observed;
   }
 
-  async function refreshActivities() {
-    if (activityLoading) return;
-    activityLoading = true;
-    try { activities = await call<Record<string, Activity>>('activities'); activityError = ''; }
-    catch (failure) { activityError = `상태 조회 실패: ${String(failure)}`; }
-    finally { activityLoading = false; }
+  async function refreshActivities(provider: 'claude' | 'codex') {
+    if (activityLoading[provider]) return;
+    activityLoading = { ...activityLoading, [provider]: true };
+    try {
+      const result = await call<Record<string, Activity>>(provider === 'codex' ? 'codex-activities' : 'activities');
+      activities = { ...activities, ...result };
+      activityErrors = { ...activityErrors, [provider]: '' };
+    } catch (failure) { activityErrors = { ...activityErrors, [provider]: `${provider === 'codex' ? 'Codex' : 'Claude'} 상태 조회 실패: ${String(failure)}` }; }
+    finally { activityLoading = { ...activityLoading, [provider]: false }; }
   }
 
   async function refresh() {
@@ -62,7 +64,8 @@
       if (scope.startsWith('group:') && !groups.some(g => `group:${g.id}` === scope)) scope = 'all';
       if (!groups.some(g => g.id === targetGroup)) targetGroup = groups[0]?.id ?? '';
       refreshError = '';
-      void refreshActivities();
+      void refreshActivities('claude');
+      void refreshActivities('codex');
     } catch (failure) { refreshError = `목록 조회 실패: ${String(failure)}`; }
     finally { loading = false; }
   }
@@ -155,7 +158,7 @@
       <div class="main-heading"><div><div class="eyebrow">YOUR AGENT WORKSPACE</div><h1>{scopeTitle}</h1><p>대화를 선택하고 해당 Desktop 앱에서 이어가세요.</p></div><label class="auto-refresh"><input type="checkbox" bind:checked={autoRefresh} /> 자동 갱신 · 5초</label></div>
       {#if error}<div role="alert" class="banner error">{error}</div>{/if}
       {#if refreshError}<div role="alert" class="banner error">{refreshError}</div>{/if}
-      {#if activityError}<div role="alert" class="banner error">{activityError}</div>{/if}
+      {#each Object.values(activityErrors).filter(Boolean) as activityError}<div role="alert" class="banner error">{activityError}</div>{/each}
       {#if groupError}<div role="alert" class="banner error">그룹 파일을 읽지 못했습니다. {groupError}</div>{/if}
       {#if warnings.length}<details class="banner warning"><summary>조회 알림 {warnings.length}개</summary>{#each warnings as warning}<p>{warning}</p>{/each}</details>{/if}
       {#if notice}<div role="status" class="banner success">{notice}</div>{/if}
@@ -208,7 +211,7 @@
           {/if}
         </section>
       {/if}
-      <footer>{activityLoading ? 'Claude 실행 상태 확인 중…' : '완료 상태는 최근 응답의 정상 종료를 뜻합니다.'}<span>대화는 각 Desktop 앱에서 실행됩니다.</span></footer>
+      <footer>{activityLoading.claude || activityLoading.codex ? '실행 상태 확인 중…' : '완료 상태는 최근 응답의 정상 종료를 뜻합니다.'}<span>대화는 각 Desktop 앱에서 실행됩니다.</span></footer>
     </main>
   </div>
 </div>
@@ -229,7 +232,7 @@
   .summary-cards { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-bottom:26px; } .summary-card { position:relative; padding:20px 22px; border:1px solid rgba(var(--accent-rgb),.15); border-radius:12px; background:linear-gradient(145deg,rgba(var(--bg-raised-rgb),.6),rgba(var(--bg-base-rgb),.5)); } .summary-card > span { color:#a1a1aa; font-size:11px; } .summary-card :global(.agent-icon) { float:right; } .summary-card strong { display:block; font-size:30px; font-weight:600; margin-top:12px; } .summary-card small { position:absolute; right:20px; bottom:24px; color:#52525b; font-size:10px; }
   .session-panel { border:1px solid #ffffff0c; border-radius:12px; overflow:hidden; background:rgba(var(--bg-base-rgb),.42); } .panel-heading { display:flex; justify-content:space-between; align-items:center; padding:18px 20px; border-bottom:1px solid #ffffff0a; } .panel-heading h2 { font-size:13px; font-weight:600; } .panel-heading h2 span { margin-left:9px; padding:3px 7px; background:rgba(var(--accent-rgb),.13); border-radius:5px; color:var(--accent-light); font-size:10px; } .panel-heading > span { font-size:10px; color:#71717a; }
   .table-heading,.session-row { display:grid; grid-template-columns:minmax(210px,1.5fr) minmax(130px,1fr) 85px 115px; gap:18px; align-items:center; } .table-heading { padding:12px 20px; color:#52525b; font-size:10px; background:#ffffff02; } .session-row { width:100%; background:none; border:0; border-top:1px solid #ffffff06; text-align:left; padding:16px 20px; } .session-row:hover { background:rgba(var(--accent-rgb),.07); } .session-title { min-width:0; display:flex; align-items:center; gap:12px; } .session-title > span { min-width:0; } .session-title strong { display:block; font-size:12px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .session-title small,.session-path small { display:block; color:#52525b; font-size:10px; margin-top:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .session-path { min-width:0; color:#a1a1aa; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } time { font-size:10px; color:#71717a; }
-  .badge { display:inline-flex; justify-content:center; width:fit-content; gap:5px; font-size:10px; padding:4px 8px; border-radius:5px; background:#ffffff06; color:#71717a; white-space:nowrap; } .badge.working { background:#8b5cf61a; color:#c4b5fd; } .badge.completed { background:#10b98118; color:#34d399; } .badge.idle { color:#a1a1aa; } .badge.error,.badge.refused { color:#fca5a5; background:#ef444418; }
+  .badge { display:inline-flex; justify-content:center; width:fit-content; gap:5px; font-size:10px; padding:4px 8px; border-radius:5px; background:#ffffff06; color:#71717a; white-space:nowrap; } .badge.working { background:#8b5cf61a; color:#c4b5fd; } .badge.completed { background:#10b98118; color:#34d399; } .badge.interrupted { background:#f59e0b18; color:#fbbf24; } .badge.idle { color:#a1a1aa; } .badge.error,.badge.refused { color:#fca5a5; background:#ef444418; }
   .banner { padding:12px 16px; border-radius:8px; margin-bottom:18px; font-size:12px; white-space:pre-wrap; overflow-wrap:anywhere; } .banner.error { background:#ef444413; border:1px solid #ef44442c; color:#fca5a5; } .banner.success { background:#10b98112; border:1px solid #10b98125; color:#6ee7b7; } .banner.warning { color:#fbbf24; background:#f59e0b0c; border:1px solid #f59e0b20; } .warning p { margin-top:8px; font-size:11px; }
   .back { border:0; background:none; color:#a1a1aa; font-size:12px; padding:0 0 18px; } .detail-card { padding:28px; border:1px solid rgba(var(--accent-rgb),.18); border-radius:12px; background:linear-gradient(145deg,var(--bg-base),var(--bg-sunken)); } .detail-heading { display:flex; align-items:center; gap:12px; margin-bottom:18px; } .provider { color:#a1a1aa; font-size:12px; } .detail-heading .badge { margin-left:auto; } .detail-card h2 { font-size:22px; line-height:1.5; overflow-wrap:anywhere; white-space:pre-wrap; } dl { display:grid; grid-template-columns:100px 1fr; row-gap:20px; margin-top:28px; } dt { color:#71717a; font-size:11px; } dd { color:#d4d4d8; font-size:12px; overflow-wrap:anywhere; } .mono { font-family:monospace; color:#a1a1aa; } .primary { border:1px solid rgba(var(--accent-rgb),.6); border-radius:8px; background:var(--accent); color:var(--accent-ink); padding:12px 18px; } .open-button { margin-top:28px; display:flex; align-items:center; gap:28px; } .open-button span { font-size:18px; } .group-assignment { display:flex; align-items:center; gap:12px; border-top:1px solid #ffffff0a; padding-top:24px; margin-top:28px; } .group-assignment label { color:#71717a; } .group-assignment select { min-width:160px; font:inherit; } .membership { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; } .membership button { border:1px solid rgba(var(--accent-rgb),.2); background:rgba(var(--accent-rgb),.1); color:var(--accent-lighter); font-size:11px; padding:5px 9px; border-radius:5px; }
   .empty { padding:60px 20px; text-align:center; color:#71717a; } .empty button { display:block; margin:16px auto 0; background:none; border:0; color:var(--accent-light); } footer { display:flex; justify-content:space-between; gap:16px; color:#52525b; font-size:10px; padding:18px 2px; }

@@ -13,6 +13,7 @@ MODULE_ROOT = Path(os.environ.get("SESSION_MANAGER_PYTHON_ROOT", Path(__file__).
 sys.path.insert(0, str(MODULE_ROOT))
 from session_manager import ManagerError, SessionManager
 from session_manager.groups import GroupStore
+from codex_activity import codex_activities
 
 
 def codex_home():
@@ -103,6 +104,9 @@ def dispatch(request, manager=None):
     action = request["action"]
     if action == "snapshot":
         return snapshot(manager)
+    if action == "codex-activities":
+        sessions, _ = codex_sessions()
+        return codex_activities(sessions, codex_home())
     if action == "activities":
         sessions = manager.list_sessions()
         by_key = {}
