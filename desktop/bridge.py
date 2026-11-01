@@ -140,12 +140,21 @@ def codex_sessions(home=None):
             has_assignment = bool(row["project_id"]) or (isinstance(assignment, dict) and isinstance(assignment.get("projectId"), str) and bool(assignment["projectId"]))
             if not project and not has_assignment and identifier not in projectless_ids:
                 project = project_for_path(row["cwd"] or "", path_projects)
+            explicit_assignment = None
+            if has_assignment and identifier not in projectless_ids:
+                if project:
+                    explicit_assignment = {"id": project["id"], "kind": "local"}
+                elif row["project_id"]:
+                    explicit_assignment = {"id": row["project_id"], "kind": "local"}
+                else:
+                    explicit_assignment = {"id": assignment["projectId"], "kind": assignment.get("projectKind", "unknown")}
             sessions.append({"key": json.dumps(member, separators=(",", ":")), "member": member,
                              "provider": "codex", "id": identifier, "title": row["name"] or row["title"] or identifier,
                              "cwd": (row["cwd"] or "").removeprefix("\\\\?\\"), "environment": "local", "host": "local",
                              "projectless": identifier in projectless_ids,
                              "projectCwd": project["root"] if project else "",
                              "codexProject": {key: project[key] for key in ("id", "name")} if project else None,
+                             "codexAssignment": explicit_assignment,
                              "lastActivity": row["recency_at_ms"] or 0})
     return sessions, warnings
 

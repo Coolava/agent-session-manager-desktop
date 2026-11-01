@@ -4,6 +4,7 @@ export type DesktopSession = {
   parentKey?: string | null; childName?: string;
   claudeGroup?: { id: string; name: string } | null;
   codexProject?: { id: string; name: string } | null;
+  codexAssignment?: { id: string; kind: string } | null;
 };
 
 export type SessionNode = {
@@ -55,6 +56,7 @@ export function sessionRoot(node: SessionNode) {
 export function sessionTreeRows(
   tree: ReturnType<typeof buildSessionTree>, scopedKeys: Set<string>, query: string,
   expanded: Set<string>, searchCollapsed: Set<string>,
+  projectNames: Map<string, string> = new Map(),
 ) {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   const included = new Set<string>();
@@ -64,7 +66,7 @@ export function sessionTreeRows(
   for (const node of tree.byKey.values()) {
     if (!scopedKeys.has(node.session.key)) continue;
     const session = node.session;
-    const text = [session.title, session.childName, session.cwd, session.projectCwd, session.claudeGroup?.name, session.codexProject?.name, session.host, session.id, session.provider, session.environment].join(' ').toLowerCase();
+    const text = [session.title, session.childName, session.cwd, session.projectCwd, session.claudeGroup?.name, session.codexProject?.name, projectNames.get(session.key), session.host, session.id, session.provider, session.environment].join(' ').toLowerCase();
     if (!words.every(word => text.includes(word))) continue;
     includeAncestors(node);
     if (words.length) {

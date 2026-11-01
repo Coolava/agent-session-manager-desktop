@@ -248,7 +248,7 @@ test('Claude scratch workspaces share this computer and retain search, refresh a
   expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([{ action: 'open', key: 'scratch-two' }]);
 });
 
-test('Codex projects combine assigned worktrees separately from folders and retain original paths and opening', async ({ page }) => {
+test('Codex projects combine assigned worktrees and same-root folders and retain original paths and opening', async ({ page }) => {
   const common = { environment: 'local', host: 'local', lastActivity: 1793300000000 };
   const codexProject = { id: 'project-1', name: 'Calibration workspace' };
   await setup(page, { extraSessions: [
@@ -259,12 +259,12 @@ test('Codex projects combine assigned worktrees separately from folders and reta
     { ...common, key: 'projectless', member: ['codex', 'local', 'projectless'], provider: 'codex', id: 'projectless', title: 'Computer conversation', cwd: 'F:/worktrees/temp/Calibration', projectCwd: 'D:/Projects/Calibration', projectless: true, codexProject },
     { ...common, key: 'empty', member: ['codex', 'local', 'empty'], provider: 'codex', id: 'empty', title: 'Empty working path', cwd: '', projectCwd: 'D:/Projects/Calibration', codexProject },
   ] });
-  await expect(page.locator('.path-row')).toHaveCount(5);
+  await expect(page.locator('.path-row')).toHaveCount(4);
   const rootProject = page.locator('.codex-project-row').filter({ hasText: 'Calibration workspace' });
   await expect(rootProject).toHaveCount(1);
   await rootProject.click();
-  await expect(page.locator('.session-row')).toHaveCount(3);
-  await expect(page.locator('.session-row')).toContainText(['Worktree one', 'Worktree two', 'Empty working path']);
+  await expect(page.locator('.session-row')).toHaveCount(4);
+  await expect(page.locator('.session-row')).toContainText(['Original project', 'Worktree one', 'Worktree two', 'Empty working path']);
   await page.screenshot({ path: '../verification/desktop-codex-projects.png' });
   await page.getByRole('textbox', { name: '세션 검색' }).fill('workspace Worktree');
   await page.getByRole('button', { name: '↻ 새로고침' }).click();
@@ -305,7 +305,7 @@ test('Codex projects with identical names and roots stay distinct by ID across r
   await expect(page.locator('.session-row')).toContainText('Task B');
 });
 
-test('Claude source groups stay separate from Codex projects, folders and other account groups', async ({ page }) => {
+test('explicit Claude groups stay distinct while unassigned folders join their unique same-root project', async ({ page }) => {
   const common = { provider: 'claude', environment: 'local', host: 'local', lastActivity: 1793300000000, cwd: 'C:/Users/test' };
   await setup(page, { extraSessions: [
     { ...common, key: 'migration', member: ['claude', 'account:org', 'migration'], id: 'migration', title: 'sp-workflow migration', claudeGroup: { id: 'cg-1', name: 'Improve_Workflow' } },
@@ -338,12 +338,10 @@ test('Claude source groups stay separate from Codex projects, folders and other 
   await sourceGroups.nth(1).click();
   await expect(page.locator('.session-row')).toHaveCount(1);
   await expect(page.locator('.session-row')).toContainText('Other account work');
-  await page.locator('.path-row').filter({ hasText: 'Improve_Workflow' }).click();
-  await expect(page.locator('.session-row')).toHaveCount(1);
-  await expect(page.locator('.session-row')).toContainText('Ordinary folder work');
+  await expect(page.locator('.path-row').filter({ hasText: 'Improve_Workflow' })).toHaveCount(0);
   await page.locator('.codex-project-row').filter({ hasText: 'Improve_Workflow' }).click();
-  await expect(page.locator('.session-row')).toHaveCount(1);
-  await expect(page.locator('.session-row')).toContainText('Codex project work');
+  await expect(page.locator('.session-row')).toHaveCount(2);
+  await expect(page.locator('.session-row')).toContainText(['Codex project work', 'Ordinary folder work']);
   await sourceGroups.first().click();
   await page.screenshot({ path: '../verification/desktop-source-classification.png' });
   await page.evaluate(() => { window.desktopSessions.forEach(session => { if (session.provider === 'claude') delete session.claudeGroup; }); });
@@ -535,4 +533,64 @@ test('missing parents remain accessible and independent sessions retain a shared
   await page.getByRole('button', { name: '▱ t3-aw', exact: true }).click();
   await expect(page.locator('.session-row')).toHaveCount(1);
   await expect(page.locator('.session-row')).toContainText('Independent project chat');
+});
+
+
+test('same-root Claude and inferred Codex sessions automatically share one folder and original links', async ({ page }) => {
+  const common = { environment: 'local', host: 'local', lastActivity: 1793300000000 };
+  await setup(page, { extraSessions: [
+    { ...common, key: 'alt-claude', member: ['claude', 'account', 'alt-claude'], provider: 'claude', id: 'alt-claude', title: 'Claude ALT task', cwd: 'D:/Projects/ALT Test' },
+    { ...common, key: 'alt-codex', member: ['codex', 'local', 'alt-codex'], provider: 'codex', id: 'alt-codex', title: 'Codex ALT task', cwd: 'F:/worktrees/ALT', projectCwd: 'd:/Projects/ALT Test/', codexProject: { id: 'alt', name: 'ALT Test' }, codexAssignment: null },
+    { ...common, key: 'alt-other', member: ['claude', 'account', 'alt-other'], provider: 'claude', id: 'alt-other', title: 'Different root task', cwd: 'E:/Projects/ALT Test' },
+  ] });
+  const project = page.locator('.path-row').filter({ hasText: 'ALT Test' });
+  await expect(project).toHaveCount(2);
+  await project.filter({ has: page.locator('span', { hasText: 'ALT Test' }) }).first().click();
+  await expect(page.locator('.session-row')).toHaveCount(2);
+  await expect(page.locator('.session-row')).toContainText(['Claude ALT task', 'Codex ALT task']);
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(page.locator('.path-row.active')).toContainText('ALT Test');
+  await showDetails(page, page.locator('[data-session-key="alt-codex"] .session-row'));
+  await expect(page.locator('dd').first()).toHaveText('F:/worktrees/ALT');
+  await page.getByRole('button', { name: /Codex Desktop에서 열기/ }).click();
+  await expect(page.getByRole('status')).toContainText('세션 열기를 요청했습니다');
+  await page.getByRole('button', { name: '← 세션 목록' }).click();
+  await page.locator('[data-session-key="alt-claude"] .session-row').click();
+  await expect.poll(() => page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([
+    { action: 'open', key: 'alt-codex' }, { action: 'open', key: 'alt-claude' },
+  ]);
+});
+
+test('same-root explicit groups and unassigned sessions remain separate across rename and reassignment', async ({ page }) => {
+  const common = { provider: 'claude', environment: 'local', host: 'local', lastActivity: 1793300000000, cwd: 'D:/SharedRoot' };
+  await setup(page, { extraSessions: [
+    { ...common, key: 'shared-a', id: 'shared-a', member: ['claude', 'account', 'shared-a'], title: 'Assigned A', claudeGroup: { id: 'a', name: 'Group A' } },
+    { ...common, key: 'shared-b', id: 'shared-b', member: ['claude', 'account', 'shared-b'], title: 'Assigned B', claudeGroup: { id: 'b', name: 'Group B' } },
+    { ...common, key: 'shared-loose', id: 'shared-loose', member: ['claude', 'account', 'shared-loose'], title: 'Unassigned Claude' },
+    { ...common, key: 'shared-inferred', id: 'shared-inferred', member: ['codex', 'local', 'shared-inferred'], provider: 'codex', title: 'Unassigned Codex', codexProject: { id: 'inferred', name: 'SharedRoot' }, codexAssignment: null },
+  ] });
+  for (const name of ['Group A', 'Group B']) {
+    await page.locator('.claude-group-row').filter({ hasText: name }).click();
+    await expect(page.locator('.session-row')).toHaveCount(1);
+    await expect(page.locator('.session-row')).toContainText(name === 'Group A' ? 'Assigned A' : 'Assigned B');
+  }
+  await page.locator('.path-row').filter({ hasText: 'SharedRoot' }).click();
+  await expect(page.locator('.session-row')).toHaveCount(2);
+  await expect(page.locator('.session-row')).toContainText(['Unassigned Claude', 'Unassigned Codex']);
+  await page.screenshot({ path: '../verification/desktop-unified-project-conflicts.png' });
+  await page.evaluate(() => { window.desktopSessions.find(s => s.key === 'shared-a').claudeGroup.name = 'Renamed A'; window.desktopSessions.reverse(); });
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(page.locator('.session-row')).toHaveCount(2);
+  await expect(page.locator('.path-row.active')).toContainText('SharedRoot');
+  await page.evaluate(() => { delete window.desktopSessions.find(s => s.key === 'shared-b').claudeGroup; });
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(page.locator('.path-row').filter({ hasText: 'SharedRoot' })).toHaveCount(0);
+  await expect(page.locator('.session-row')).toHaveCount(6);
+  await page.locator('.claude-group-row').filter({ hasText: 'Renamed A' }).click();
+  await expect(page.locator('.session-row')).toHaveCount(4);
+  await page.getByRole('textbox', { name: '세션 검색' }).fill('Renamed Unassigned');
+  await expect(page.locator('.session-row')).toHaveCount(2);
+  await showDetails(page, page.locator('[data-session-key="shared-inferred"] .session-row'));
+  await expect(page.locator('.detail-card')).toContainText('Renamed A');
+  await expect(page.locator('.detail-card')).not.toContainText('Claude 그룹');
 });

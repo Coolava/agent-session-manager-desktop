@@ -99,6 +99,29 @@ class DesktopBridgeTests(unittest.TestCase):
         return {"local-projects": {"local-project": {"name": "Project display name", "rootPaths": [r"D:\project", "E:/second-root"]}},
                 "thread-project-assignments": {self.identifier: {"projectKind": "local", "projectId": "local-project"}}}
 
+    def test_codex_assignment_distinguishes_explicit_path_and_unresolved_sources(self):
+        self.database()
+        state = self.project_state()
+        state_path = self.home / ".codex-global-state.json"
+        for assignment, projectless, expected in [
+            ({"projectKind": "local", "projectId": "local-project"}, [], {"id": "local-project", "kind": "local"}),
+            (None, [], None),
+            ({"projectKind": "local", "projectId": "deleted"}, [], {"id": "deleted", "kind": "local"}),
+            ({"projectKind": "remote", "projectId": "remote-project"}, [], {"id": "remote-project", "kind": "remote"}),
+            ({"projectKind": "local", "projectId": "local-project"}, [self.identifier], None),
+        ]:
+            with self.subTest(assignment=assignment, projectless=projectless):
+                state["thread-project-assignments"] = {self.identifier: assignment}
+                state["projectless-thread-ids"] = projectless
+                state_path.write_text(json.dumps(state), encoding="utf-8")
+                before = state_path.read_bytes()
+                session = bridge.codex_sessions(self.home)[0][0]
+                self.assertIn("codexAssignment", session)
+                self.assertEqual(session["codexAssignment"], expected)
+                if assignment is None:
+                    self.assertEqual(session["codexProject"]["id"], "local-project")
+                self.assertEqual(state_path.read_bytes(), before)
+
     def test_codex_project_assignment_preserves_worktree_and_refreshes(self):
         database = self.database()
         with closing(sqlite3.connect(database)) as connection, connection:
@@ -208,6 +231,7 @@ class DesktopBridgeTests(unittest.TestCase):
         state_path.write_text(json.dumps(state), encoding="utf-8")
         sessions, warnings = bridge.codex_sessions(self.home)
         self.assertEqual(sessions[0].get("codexProject"), {"id": "native-id", "name": "Renamed project"})
+        self.assertEqual(sessions[0]["codexAssignment"], {"id": "native-id", "kind": "local"})
         self.assertEqual(sessions[0]["projectCwd"], "D:/native")
         self.assertEqual(warnings, [])
         del state["app-server-project-id-by-legacy-project-id-by-host"]["local:" + str(self.home)]
@@ -303,6 +327,7 @@ class DesktopBridgeTests(unittest.TestCase):
         state_path.write_text(json.dumps(state), encoding="utf-8")
         session = bridge.codex_sessions(self.home)[0][0]
         self.assertEqual(session.get("codexProject"), {"id": "native", "name": "Native"})
+        self.assertIsNone(session["codexAssignment"])
         self.assertEqual(session["projectCwd"], "D:/project")
         with closing(sqlite3.connect(database)) as connection, connection:
             connection.execute("UPDATE threads SET cwd='E:/second-root/obsolete'")
