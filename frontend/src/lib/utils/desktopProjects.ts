@@ -20,9 +20,9 @@ function explicitKey(session: Session) {
   return identifier ? JSON.stringify(['codex-project', session.environment, session.host, session.member[1], assignment?.kind || 'local', identifier]) : '';
 }
 
-export function classificationSession(session: Session, tree: { byKey: Map<string, SessionNode> }) {
+export function classificationSession(session: Session, tree: { byKey: Map<string, SessionNode> }, excluded = new Set<string>()) {
   let node = tree.byKey.get(session.key)!;
-  while (node.parent && !explicitKey(node.session)) node = node.parent;
+  while (node.parent && !excluded.has(node.parent.session.key) && !explicitKey(node.session)) node = node.parent;
   return node.session;
 }
 
@@ -44,9 +44,15 @@ function rootKey(session: Session) {
   return JSON.stringify(['root', session.environment, session.host, path]);
 }
 
-export function classifyProjects(tree: { byKey: Map<string, SessionNode> }) {
-  const sessions = [...new Map([...tree.byKey.values()].map(node => {
-    const session = classificationSession(node.session, tree);
+export function classifyProjects(tree: { byKey: Map<string, SessionNode> }, groups: readonly { members: readonly string[][] }[] | null = []) {
+  const bySession = new Map<string, string>();
+  const representatives = new Map<string, Session>();
+  const combined = new Map<string, string>();
+  if (groups === null) return { bySession, representatives, combined };
+  const memberships = new Set(groups.flatMap(group => group.members.map(member => JSON.stringify(member))));
+  const excluded = new Set([...tree.byKey.values()].filter(node => memberships.has(JSON.stringify(node.session.member))).map(node => node.session.key));
+  const sessions = [...new Map([...tree.byKey.values()].filter(node => !excluded.has(node.session.key)).map(node => {
+    const session = classificationSession(node.session, tree, excluded);
     return [session.key, session] as const;
   })).values()].sort((a, b) => a.key.localeCompare(b.key));
   const roots = new Map<string, Map<string, Session>>();
@@ -56,20 +62,38 @@ export function classifyProjects(tree: { byKey: Map<string, SessionNode> }) {
     if (!roots.has(root)) roots.set(root, new Map());
     roots.get(root)!.set(key, session);
   }
-  const bySession = new Map<string, string>();
-  const representatives = new Map<string, Session>();
+  const targets = new Map<string, Map<string, Session>>();
+  const aliases = new Map<string, Map<string, string>>();
+  for (const [root, anchors] of roots) {
+    const names = new Map<string, [string, Session][]>();
+    for (const [key, session] of anchors) {
+      const name = (sourceGroup(session)?.name || sourceProject(session)?.name || '').trim();
+      if (name) names.set(name, [...(names.get(name) || []), [key, session]]);
+    }
+    const mapping = new Map<string, string>();
+    for (const [name, entries] of names) {
+      if (entries.length < 2 || new Set(entries.map(([, session]) => session.provider)).size !== entries.length) continue;
+      const key = JSON.stringify(['combined-project', root, name]);
+      combined.set(key, name);
+      for (const [source] of entries) mapping.set(source, key);
+    }
+    aliases.set(root, mapping);
+    targets.set(root, new Map([...anchors].map(([key, session]) => [mapping.get(key) || key, session])));
+  }
   for (const session of sessions) {
     const explicit = explicitKey(session);
     const computer = !explicit && isComputerWorkspace(session);
     const root = rootKey(session);
-    const anchors = roots.get(root);
+    const anchors = targets.get(root);
     const candidate = !explicit && !computer && anchors?.size === 1 ? [...anchors.entries()][0] : undefined;
     const anchor = candidate && (sourceGroup(candidate[1]) || sourceProject(candidate[1])) ? candidate : undefined;
-    const key = explicit || (computer ? JSON.stringify(['computer', session.environment, session.host]) : anchor?.[0] || root || JSON.stringify(['no-root', session.key]));
+    const key = (explicit && (aliases.get(root)?.get(explicit) || explicit)) || (computer ? JSON.stringify(['computer', session.environment, session.host]) : anchor?.[0] || root || JSON.stringify(['no-root', session.key]));
     const representative = explicit ? session : anchor?.[1] || { ...session, codexProject: undefined };
     bySession.set(session.key, key);
     if (!representatives.has(key)) representatives.set(key, representative);
   }
-  for (const node of tree.byKey.values()) bySession.set(node.session.key, bySession.get(classificationSession(node.session, tree).key)!);
-  return { bySession, representatives };
+  for (const node of tree.byKey.values()) {
+    if (!excluded.has(node.session.key)) bySession.set(node.session.key, bySession.get(classificationSession(node.session, tree, excluded).key)!);
+  }
+  return { bySession, representatives, combined };
 }

@@ -8,8 +8,9 @@ async function setup(page, options = {}) {
       { key: 'codex-key', member: ['codex', 'local', 'codex-id'], provider: 'codex', id: 'codex-id', title: 'Session manager UI', cwd: 'D:/Projects/SessionManager', environment: 'local', host: 'local', lastActivity: 1793290000000 },
       ...(options.extraSessions ?? []),
     ];
-    const groups = [];
+    const groups = options.groups ?? [];
     window.desktopSessions = sessions;
+    window.desktopGroups = groups;
     window.extraActivities = Object.fromEntries(Object.entries(options.childStates ?? {}).map(([key, state]) => [key, { state, detail: 'Child response', observed_at: Date.now() / 1000 }]));
     window.desktopCalls = [];
     window.go = { main: { App: { Call: async request => {
@@ -22,9 +23,14 @@ async function setup(page, options = {}) {
       if (request.action === 'codex-activities') return { 'codex-key': { state: window.codexState ?? 'working', detail: 'Codex turn state', observed_at: Date.now() / 1000 } };
       if (request.action === 'open') { await new Promise(resolve => setTimeout(resolve, window.openDelay ?? 300)); if (window.openFailure) throw new Error('Desktop link failed'); return { requested: true }; }
       if (request.action === 'create-group') { const group = { id: 'group-1', name: request.name, members: [] }; groups.push(group); return group; }
-      if (request.action === 'add-member') groups[0].members.push(sessions.find(s => s.key === request.key).member);
-      if (request.action === 'rename-group') groups[0].name = request.name;
-      if (request.action === 'delete-group') groups.splice(0, groups.length);
+      if (request.action === 'add-member') groups.find(g => g.id === request.id).members.push(sessions.find(s => s.key === request.key).member);
+      if (request.action === 'remove-member') {
+        const group = groups.find(g => g.id === request.id);
+        const member = sessions.find(s => s.key === request.key).member;
+        group.members = group.members.filter(value => JSON.stringify(value) !== JSON.stringify(member));
+      }
+      if (request.action === 'rename-group') groups.find(g => g.id === request.id).name = request.name;
+      if (request.action === 'delete-group') groups.splice(groups.findIndex(g => g.id === request.id), 1);
       return groups;
     } } } };
   }, options);
@@ -593,4 +599,92 @@ test('same-root explicit groups and unassigned sessions remain separate across r
   await showDetails(page, page.locator('[data-session-key="shared-inferred"] .session-row'));
   await expect(page.locator('.detail-card')).toContainText('Renamed A');
   await expect(page.locator('.detail-card')).not.toContainText('Claude 그룹');
+});
+
+const matchingProjectSessions = [
+  { key: 'inspector-claude', member: ['claude', 'account', 'inspector-claude'], provider: 'claude', id: 'inspector-claude', title: 'Claude inspector', cwd: 'D:/Inspector', claudeGroup: { id: 'cg', name: 'Inspector' } },
+  { key: 'inspector-codex', member: ['codex', 'local', 'inspector-codex'], provider: 'codex', id: 'inspector-codex', title: 'Codex inspector', cwd: 'D:/Inspector', codexProject: { id: 'cx', name: 'Inspector' } },
+  { key: 'inspector-loose', member: ['claude', 'account', 'inspector-loose'], provider: 'claude', id: 'inspector-loose', title: 'Loose inspector', cwd: 'D:/Inspector' },
+].map(s => ({ environment: 'local', host: 'local', lastActivity: 1793300000000, ...s }));
+
+test('manual memberships override automatic projects until the last group is removed', async ({ page }) => {
+  const member = matchingProjectSessions[2].member;
+  await setup(page, { extraSessions: matchingProjectSessions, groups: [
+    { id: 'manual-a', name: 'Manual A', members: [member] },
+    { id: 'manual-b', name: 'Manual B', members: [member] },
+  ] });
+  const automatic = page.locator('.combined-project-row').filter({ hasText: 'Inspector' });
+  await automatic.click();
+  await expect(page.locator('.session-row')).toHaveCount(2);
+  await expect(page.locator('[data-session-key="inspector-loose"]')).toHaveCount(0);
+  await expect(page.locator('.claude-group-row, .codex-project-row')).toHaveCount(0);
+  await page.screenshot({ path: '../verification/desktop-manual-priority.png' });
+  await page.getByRole('button', { name: '◇ Manual A 1', exact: true }).click();
+  await showDetails(page, page.locator('.session-row'));
+  await expect(page.locator('.detail-card')).not.toContainText('통합 프로젝트');
+  await page.getByRole('button', { name: 'Manual A ×', exact: true }).click();
+  await page.getByRole('button', { name: '← 세션 목록' }).click();
+  await automatic.click();
+  await expect(page.locator('.session-row')).toHaveCount(2);
+  await page.getByRole('button', { name: '◇ Manual B 1', exact: true }).click();
+  await showDetails(page, page.locator('.session-row'));
+  await page.getByRole('button', { name: 'Manual B ×', exact: true }).click();
+  await page.getByRole('button', { name: '← 세션 목록' }).click();
+  await automatic.click();
+  await expect(page.locator('.session-row')).toHaveCount(3);
+  await showDetails(page, page.locator('[data-session-key="inspector-loose"] .session-row'));
+  await page.locator('#target-group').selectOption('manual-a');
+  await page.getByRole('button', { name: '그룹에 추가', exact: true }).click();
+  await page.getByRole('button', { name: '← 세션 목록' }).click();
+  await automatic.click();
+  await expect(page.locator('.session-row')).toHaveCount(2);
+  await page.getByRole('button', { name: '◇ Manual A 1', exact: true }).click();
+  await page.getByRole('button', { name: '그룹 삭제', exact: true }).click();
+  await page.getByRole('button', { name: '삭제 확인', exact: true }).click();
+  await automatic.click();
+  await expect(page.locator('.session-row')).toHaveCount(3);
+  await page.locator('aside .nav-row').filter({ hasText: '전체 세션' }).click();
+  await expect(page.locator('.session-row')).toHaveCount(5);
+  await page.locator('aside .nav-row').filter({ hasText: 'Claude Desktop' }).click();
+  await expect(page.locator('.session-row')).toHaveCount(3);
+});
+
+test('automatic projects merge matching providers within one root and keep other roots separate', async ({ page }) => {
+  await setup(page, { extraSessions: [...matchingProjectSessions,
+    { ...matchingProjectSessions[0], key: 'inspector-other', id: 'inspector-other', member: ['claude', 'account', 'inspector-other'], cwd: 'F:/Other', title: 'Other path' },
+  ] });
+  const automatic = page.locator('.combined-project-row').filter({ hasText: 'Inspector' });
+  await automatic.click();
+  await expect(page.locator('.session-row')).toHaveCount(3);
+  await expect(page.locator('[data-session-key="inspector-other"]')).toHaveCount(0);
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(automatic).toHaveClass(/active/);
+  await page.locator('.claude-group-row').filter({ hasText: 'Inspector' }).click();
+  await expect(page.locator('.session-row')).toHaveCount(1);
+  await expect(page.locator('.session-row')).toContainText('Other path');
+  await page.evaluate(() => { window.desktopSessions.find(s => s.key === 'inspector-codex').codexProject.name = 'Different project'; });
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(automatic).toHaveCount(0);
+  await page.getByRole('button', { name: '▱ Inspector', exact: true }).click();
+  await expect(page.locator('.session-row')).toHaveCount(1);
+  await expect(page.locator('.session-row')).toContainText('Loose inspector');
+});
+
+test('a manually grouped parent is context only in its unassigned childs automatic folder', async ({ page }) => {
+  await setup(page, { extraSessions: childSessions, initialRows: 2, groups: [
+    { id: 'parent-manual', name: 'Parent work', members: [['claude', 'account', 'claude-id']] },
+  ] });
+  await page.locator('.path-row').filter({ hasText: 't3-aw' }).click();
+  await expect(page.locator('.session-row')).toHaveCount(2);
+  await expect(page.locator('[data-session-key="claude-key"]')).toHaveClass(/context-entry/);
+  await expect(page.locator('[data-session-key="claude-key"]')).toContainText('문맥 표시');
+  await expect(page.locator('[data-session-key="child-aw"]')).not.toHaveClass(/context-entry/);
+  await page.getByRole('button', { name: '◇ Parent work 1', exact: true }).click();
+  await expect(page.locator('.session-row')).toHaveCount(1);
+  await page.evaluate(() => { window.groupFailure = true; });
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(page.locator('.path-row, .claude-group-row, .codex-project-row, .combined-project-row')).toHaveCount(0);
+  await expect(page.locator('aside .nav-row').filter({ hasText: 'Parent work' })).toContainText('1');
+  await page.locator('aside .nav-row').filter({ hasText: '전체 세션' }).click();
+  await expect(page.locator('.session-row')).toHaveCount(2);
 });

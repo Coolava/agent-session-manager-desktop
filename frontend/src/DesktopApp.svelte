@@ -66,7 +66,7 @@
     loading = true;
     try {
       const data = await call<Snapshot>('snapshot');
-      sessions = data.sessions; groups = data.groups; warnings = data.warnings; groupError = data.groupError;
+      sessions = data.sessions; if (!data.groupError) groups = data.groups; warnings = data.warnings; groupError = data.groupError;
       if (selectedKey && !sessions.some(s => s.key === selectedKey)) selectedKey = '';
       if (sessionMenu && !sessions.some(s => s.key === sessionMenu!.key)) closeSessionMenu();
       if (scope.startsWith('group:') && !groups.some(g => `group:${g.id}` === scope)) scope = 'all';
@@ -129,7 +129,7 @@
   function contains(group: Group, session: Session) { return group.members.some(member => JSON.stringify(member) === JSON.stringify(session.member)); }
   function projectKey(session: Session) { return projectClassification.bySession.get(session.key)!; }
   function projectLabel(session: Session) { return isComputerWorkspace(session) ? '이 컴퓨터' : folder(projectPath(session)) + (session.environment === 'ssh' ? ` · ${session.host}` : ''); }
-  function projectName(session: Session) { return sourceGroup(session)?.name || sourceProject(session)?.name || projectLabel(session); }
+  function projectName(session: Session) { return projectClassification.combined.get(projectKey(session)) || sourceGroup(session)?.name || sourceProject(session)?.name || projectLabel(session); }
   function folder(path: string) { return path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path || '작업 폴더 없음'; }
   function date(value: number) { return value ? new Date(value).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '기록 없음'; }
   function toggleChildren(key: string, automatic: boolean) {
@@ -139,7 +139,7 @@
   }
 
   $: tree = buildSessionTree(sessions);
-  $: projectClassification = classifyProjects(tree);
+  $: projectClassification = classifyProjects(tree, groupError ? null : groups);
   $: selected = sessions.find(s => s.key === selectedKey);
   $: selectedProject = selected && projectClassification.representatives.get(projectKey(selected));
   $: selectedSourceGroup = selected && sourceGroup(classificationSession(selected, tree));
@@ -147,14 +147,18 @@
   $: selectedNode = tree.byKey.get(selectedKey);
   $: selectedGroup = groups.find(g => `group:${g.id}` === scope);
   $: classifications = [...projectClassification.representatives.values()];
-  $: sourceGroups = classifications.filter(s => sourceGroup(s)).sort((a, b) => sourceGroup(a)!.name.localeCompare(sourceGroup(b)!.name));
-  $: codexProjects = classifications.filter(s => sourceProject(s)).sort((a, b) => sourceProject(a)!.name.localeCompare(sourceProject(b)!.name));
-  $: paths = classifications.filter(s => !sourceGroup(s) && !sourceProject(s) && (projectPath(s) || isComputerWorkspace(s))).sort((a, b) => projectPath(a).localeCompare(projectPath(b)));
-  $: projectNames = new Map(sessions.map(session => [session.key, projectName(projectClassification.representatives.get(projectKey(session))!)]));
+  $: combinedProjects = classifications.filter(s => projectClassification.combined.has(projectKey(s))).sort((a, b) => projectName(a).localeCompare(projectName(b)));
+  $: sourceGroups = classifications.filter(s => !projectClassification.combined.has(projectKey(s)) && sourceGroup(s)).sort((a, b) => sourceGroup(a)!.name.localeCompare(sourceGroup(b)!.name));
+  $: codexProjects = classifications.filter(s => !projectClassification.combined.has(projectKey(s)) && sourceProject(s)).sort((a, b) => sourceProject(a)!.name.localeCompare(sourceProject(b)!.name));
+  $: paths = classifications.filter(s => !projectClassification.combined.has(projectKey(s)) && !sourceGroup(s) && !sourceProject(s) && (projectPath(s) || isComputerWorkspace(s))).sort((a, b) => projectPath(a).localeCompare(projectPath(b)));
+  $: projectNames = new Map(sessions.map(session => {
+    const project = projectClassification.representatives.get(projectKey(session));
+    return [session.key, [...groups.filter(group => contains(group, session)).map(group => group.name), ...(project ? [projectName(project)] : [])].join(' ')] as const;
+  }));
   $: if (scope.startsWith('path:') && !classifications.some(s => `path:${projectKey(s)}` === scope)) scope = 'all';
   $: scopedKeys = new Set(sessions.filter(session => {
     if (scope === 'claude' || scope === 'codex') { if (session.provider !== scope) return false; }
-    if (scope.startsWith('path:') && projectKey(classificationSession(session, tree)) !== scope.slice(5)) return false;
+    if (scope.startsWith('path:') && projectKey(session) !== scope.slice(5)) return false;
     if (selectedGroup && !contains(selectedGroup, session)) return false;
     return true;
   }).map(session => session.key));
@@ -207,11 +211,19 @@
         <input aria-label="새 그룹 이름" bind:value={groupName} maxlength="100" placeholder="새 그룹 이름" disabled={!!groupError} />
         <button aria-label="그룹 만들기" disabled={!groupName.trim() || groupBusy || !!groupError}>＋</button>
       </form>
+      {#if combinedProjects.length}
+        <details class="combined-projects" open>
+          <summary class="sidebar-label spaced">AUTO PROJECTS <span>{combinedProjects.length}</span></summary>
+          {#each combinedProjects as project (projectKey(project))}
+            <button class="nav-row combined-project-row" class:active={scope === `path:${projectKey(project)}`} title={`Claude · Codex · ${project.host} · ${projectPath(project)}`} on:click={() => { scope = `path:${projectKey(project)}`; selectedKey = ''; }}><span class="folder-icon">▱</span><span>{projectName(project)}<small class="project-root-hint">{projectPath(project)}</small></span></button>
+          {/each}
+        </details>
+      {/if}
       {#if sourceGroups.length}
         <details class="claude-groups" open>
           <summary class="sidebar-label spaced">CLAUDE GROUPS <span>{sourceGroups.length}</span></summary>
           {#each sourceGroups as project (projectKey(project))}
-            <button class="nav-row claude-group-row" class:active={scope === `path:${projectKey(project)}`} title={`Claude 원본 그룹 · ${sourceGroup(project)!.name} · ${project.member[1]}`} on:click={() => { scope = `path:${projectKey(project)}`; selectedKey = ''; }}><AgentIcon agent="claude" size="sm" /><span>{sourceGroup(project)!.name}</span></button>
+            <button class="nav-row claude-group-row" class:active={scope === `path:${projectKey(project)}`} title={`Claude 원본 그룹 · ${sourceGroup(project)!.name} · ${project.member[1]} · ${projectPath(project)}`} on:click={() => { scope = `path:${projectKey(project)}`; selectedKey = ''; }}><AgentIcon agent="claude" size="sm" /><span>{sourceGroup(project)!.name}{#if combinedProjects.some(combined => projectName(combined) === sourceGroup(project)!.name.trim())}<small class="project-root-hint">{projectPath(project)}</small>{/if}</span></button>
           {/each}
         </details>
       {/if}
@@ -281,7 +293,7 @@
               {@const session = row.node.session}
               {@const state = activity(session, now)}
               {@const workingChildren = row.descendants.filter(child => activity(child, now).state === 'working').length}
-              <div class="session-entry" class:child-entry={row.depth > 0} class:branch-entry={row.descendants.length > 0} class:expanded-entry={row.expanded} data-session-key={session.key} style={`--tree-indent:${Math.min(row.depth, 4) * 28}px`}>
+              <div class="session-entry" class:child-entry={row.depth > 0} class:branch-entry={row.descendants.length > 0} class:expanded-entry={row.expanded} class:context-entry={!scopedKeys.has(session.key)} data-session-key={session.key} style={`--tree-indent:${Math.min(row.depth, 4) * 28}px`}>
                 <span class="tree-lines" aria-hidden="true">
                   {#each row.continuations.slice(0, 4) as continues, level}
                     {#if continues || level === row.depth - 1}
@@ -295,7 +307,7 @@
                   <button class="tree-toggle" aria-label={`${row.expanded ? '하위 세션 접기' : '하위 세션 펼치기'}: ${session.title}`} aria-expanded={row.expanded} on:click={() => toggleChildren(session.key, row.automatic)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg></button>
                 {/if}
                 <button class="session-row" on:click={event => { if (event.detail < 2) void openSession(session); }} on:contextmenu={event => showSessionMenu(event, session)} on:keydown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) void showSessionMenu(event, session); }} aria-haspopup="menu" disabled={opening} title={session.title}>
-                  <span class="session-title"><AgentIcon agent={session.provider} size="md" /><span><strong>{session.childName || session.title}</strong><small>{session.environment === 'ssh' ? `SSH · ${session.host}` : `${session.provider === 'codex' ? 'Codex' : 'Claude'} · 로컬`}{#if session.parentKey}{' · 하위 세션'}{/if}{#if row.node.parentUnavailable}<span class="missing-parent">{' · 부모 대화 확인 불가'}</span>{/if}</small>{#if row.descendants.length}<small class="hierarchy-summary" title="현재 필터에 포함된 하위 세션">하위 {row.descendants.length}개{#if workingChildren}<span class="descendant-working">{' · '}{workingChildren}개 작업 중</span>{/if}</small>{/if}</span></span>
+                  <span class="session-title"><AgentIcon agent={session.provider} size="md" /><span><strong>{session.childName || session.title}</strong><small>{session.environment === 'ssh' ? `SSH · ${session.host}` : `${session.provider === 'codex' ? 'Codex' : 'Claude'} · 로컬`}{#if session.parentKey}{' · 하위 세션'}{/if}{#if row.node.parentUnavailable}<span class="missing-parent">{' · 부모 대화 확인 불가'}</span>{/if}{#if !scopedKeys.has(session.key)}<span class="context-label">{' · 문맥 표시'}</span>{/if}</small>{#if row.descendants.length}<small class="hierarchy-summary" title="현재 필터에 포함된 하위 세션">하위 {row.descendants.length}개{#if workingChildren}<span class="descendant-working">{' · '}{workingChildren}개 작업 중</span>{/if}</small>{/if}</span></span>
                   <span class="session-path" title={session.cwd}>{folder(session.cwd)}<small>{session.cwd}</small></span>
                   <span class="badge {state.state}">{labels[state.state]}</span><time>{date(session.lastActivity)}</time>
                 </button>
@@ -329,9 +341,10 @@
   .group-tools { display:flex; gap:8px; margin-bottom:18px; } .group-tools input { background:var(--bg-raised); border:1px solid #ffffff18; padding:8px 12px; border-radius:7px; } .group-tools button,.warning button { background:#ffffff06; border:1px solid #ffffff18; padding:8px 12px; border-radius:7px; } .warning button { margin:8px 0 0 8px; }
   main { flex:1; min-width:0; overflow-y:auto; padding:32px 34px 16px; } .auto-refresh { display:flex; align-items:center; gap:8px; color:#a1a1aa; font-size:11px; white-space:nowrap; } input[type=checkbox] { accent-color:var(--accent); }
   .session-panel { border:1px solid #ffffff0c; border-radius:12px; overflow:hidden; background:rgba(var(--bg-base-rgb),.42); } .panel-heading { display:flex; justify-content:space-between; align-items:center; padding:18px 20px; border-bottom:1px solid #ffffff0a; } .panel-heading h2 { font-size:13px; font-weight:600; } .panel-heading > span { font-size:10px; color:#71717a; }
+  .nav-row .project-root-hint { display:block; overflow:hidden; text-overflow:ellipsis; font-size:10px; margin-top:5px; }
   .table-heading,.session-row { display:grid; grid-template-columns:minmax(210px,1.5fr) minmax(130px,1fr) 85px 115px; gap:18px; align-items:center; } .table-heading { padding:12px 20px; color:#52525b; font-size:10px; background:#ffffff02; } .session-row { width:100%; background:none; border:0; border-top:1px solid #ffffff06; text-align:left; padding:16px 20px; } .session-row:hover { background:rgba(var(--accent-rgb),.07); } .session-title { min-width:0; display:flex; align-items:center; gap:12px; } .session-title > span { min-width:0; } .session-title strong { display:block; font-size:12px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .session-title small,.session-path small { display:block; color:#52525b; font-size:10px; margin-top:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .session-path { min-width:0; color:#a1a1aa; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } time { font-size:10px; color:#71717a; }
   .badge { display:inline-flex; justify-content:center; width:fit-content; gap:5px; font-size:10px; padding:4px 8px; border-radius:5px; background:#ffffff06; color:#71717a; white-space:nowrap; } .badge.working { background:#8b5cf61a; color:#c4b5fd; } .badge.completed { background:#10b98118; color:#34d399; } .badge.interrupted { background:#f59e0b18; color:#fbbf24; } .badge.idle { color:#a1a1aa; } .badge.error,.badge.refused { color:#fca5a5; background:#ef444418; }
-  .session-entry { position:relative; } .session-entry .session-title { padding-left:calc(44px + var(--tree-indent)); } .tree-toggle { position:absolute; z-index:1; left:calc(20px + var(--tree-indent)); top:50%; transform:translateY(-50%); display:flex; align-items:center; justify-content:center; width:32px; height:32px; padding:0; border:1px solid rgba(var(--accent-rgb),.45); border-radius:7px; color:var(--accent-lighter); background:rgba(var(--accent-rgb),.16); } .tree-toggle:hover { background:rgba(var(--accent-rgb),.3); border-color:var(--accent-light); } .tree-toggle:focus-visible { outline:2px solid var(--accent-light); outline-offset:2px; } .tree-toggle[aria-expanded=true] svg { transform:rotate(90deg); } .session-title .hierarchy-summary { color:#a1a1aa; } .session-title .descendant-working { color:#c4b5fd; } .missing-parent { color:#fbbf24; } .parent-link { margin-top:14px; color:#a1a1aa; font-size:12px; } .parent-link button { border:0; background:none; color:var(--accent-light); text-align:left; }
+  .session-entry { position:relative; } .session-entry .session-title { padding-left:calc(44px + var(--tree-indent)); } .tree-toggle { position:absolute; z-index:1; left:calc(20px + var(--tree-indent)); top:50%; transform:translateY(-50%); display:flex; align-items:center; justify-content:center; width:32px; height:32px; padding:0; border:1px solid rgba(var(--accent-rgb),.45); border-radius:7px; color:var(--accent-lighter); background:rgba(var(--accent-rgb),.16); } .tree-toggle:hover { background:rgba(var(--accent-rgb),.3); border-color:var(--accent-light); } .tree-toggle:focus-visible { outline:2px solid var(--accent-light); outline-offset:2px; } .tree-toggle[aria-expanded=true] svg { transform:rotate(90deg); } .session-title .hierarchy-summary { color:#a1a1aa; } .session-title .descendant-working { color:#c4b5fd; } .missing-parent { color:#fbbf24; } .session-title .context-label { color:#a1a1aa; } .parent-link { margin-top:14px; color:#a1a1aa; font-size:12px; } .parent-link button { border:0; background:none; color:var(--accent-light); text-align:left; }
   .expanded-entry { background:rgba(var(--accent-rgb),.1); }
   .expanded-entry .session-title strong { font-weight:600; }
   .child-entry { background:rgba(var(--accent-rgb),.055); box-shadow:inset 3px 0 rgba(var(--accent-rgb),.35); }

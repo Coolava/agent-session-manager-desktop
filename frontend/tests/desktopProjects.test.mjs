@@ -13,7 +13,7 @@ const { buildSessionTree } = await load('desktopSessionTree');
 const session = (key, extra = {}) => ({ key, id: key, member: ['claude', 'account:org', key], provider: 'claude',
   title: key, cwd: 'D:/Projects/ALT Test', environment: 'local', host: 'local', lastActivity: 1, ...extra });
 const codex = (key, extra = {}) => session(key, { provider: 'codex', member: ['codex', 'local', key], ...extra });
-const classify = sessions => classifyProjects(buildSessionTree(sessions));
+const classify = (sessions, groups) => classifyProjects(buildSessionTree(sessions), groups);
 const members = (result, key) => [...result.bySession].filter(([, target]) => target === result.bySession.get(key)).map(([id]) => id).sort();
 
 test('unassigned providers and path-inferred projects share one exact root', () => {
@@ -43,7 +43,7 @@ test('different explicit IDs remain separate and unassigned sessions cannot brid
   }
 });
 
-test('cross-provider and cross-account explicit assignments remain distinct despite equal names', () => {
+test('ambiguous duplicate account targets remain distinct despite equal provider project names', () => {
   const result = classify([session('a', { claudeGroup: { id: 'same', name: 'Same' } }),
     session('b', { member: ['claude', 'other:org', 'b'], claudeGroup: { id: 'same', name: 'Same' } }),
     codex('c', { codexProject: { id: 'same', name: 'Same' }, codexAssignment: { id: 'same', kind: 'local' } })]);
@@ -102,4 +102,51 @@ test('renames and removing a conflicting assignment reclassify deterministically
   assert.equal(classify(items).representatives.size, 3);
   delete b.claudeGroup;
   assert.deepEqual(members(classify(items), 'a'), ['a', 'b', 'loose']);
+});
+
+test('manual memberships are excluded before automatic anchors are collected and return after the last removal', () => {
+  const manual = session('manual', { claudeGroup: { id: 'manual-source', name: 'Manual source' } });
+  const items = [manual, session('loose'), codex('codex', { codexProject: { id: 'a', name: 'Automatic' } })];
+  const a = { members: [manual.member] }, b = { members: [manual.member] };
+  for (const groups of [[a, b], [b]]) {
+    const result = classify(items, groups);
+    assert.equal(result.bySession.has('manual'), false);
+    assert.deepEqual(members(result, 'loose'), ['codex', 'loose']);
+    assert.equal(result.representatives.size, 1);
+  }
+  assert.equal(classify(items, []).bySession.has('manual'), true);
+  assert.equal(classify(items, null).representatives.size, 0);
+});
+
+test('matching unique provider projects combine only within their shared root and absorb unassigned sessions', () => {
+  const items = [session('claude', { claudeGroup: { id: 'cg', name: 'Inspector' } }),
+    session('other-root', { cwd: 'F:/Claude_Session', claudeGroup: { id: 'cg', name: 'Inspector' } }),
+    codex('codex', { codexProject: { id: 'cx', name: ' Inspector ' } }), session('loose')];
+  for (const ordered of [items, [...items].reverse()]) {
+    const result = classify(ordered);
+    assert.deepEqual(members(result, 'claude'), ['claude', 'codex', 'loose']);
+    assert.deepEqual(members(result, 'other-root'), ['other-root']);
+    assert.equal(result.combined.get(result.bySession.get('claude')), 'Inspector');
+    assert.equal(result.representatives.size, 2);
+  }
+});
+
+test('different provider names, hosts and duplicate account targets do not combine', () => {
+  for (const extra of [
+    { codexProject: { id: 'cx', name: 'Different' } },
+    { codexProject: { id: 'cx', name: 'Inspector' }, host: 'other-host' },
+    { codexProject: { id: 'cx', name: 'inspector' } },
+  ]) {
+    const result = classify([session('claude', { claudeGroup: { id: 'cg', name: 'Inspector' } }), codex('codex', extra)]);
+    assert.notEqual(result.bySession.get('claude'), result.bySession.get('codex'));
+  }
+});
+
+test('manual parents do not supply automatic anchors or membership to their unassigned children', () => {
+  const parent = session('parent', { claudeGroup: { id: 'cg', name: 'Parent group' } });
+  const result = classify([parent, session('child', { parentKey: 'parent', cwd: 'F:/child' }),
+    session('loose', { cwd: 'F:/child' })], [{ members: [parent.member] }]);
+  assert.equal(result.bySession.has('parent'), false);
+  assert.deepEqual(members(result, 'child'), ['child', 'loose']);
+  assert.equal(result.representatives.values().next().value.claudeGroup, undefined);
 });
