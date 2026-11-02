@@ -32,15 +32,20 @@ async function setup(page, options = {}) {
     window.go = { main: { App: { Call: async request => {
       window.desktopCalls.push(request);
       if (request.action === 'snapshot') {
-        const result = structuredClone({ sessions, groups, warnings: [], groupError: window.groupFailure ? 'Broken groups' : '' });
+        if (window.snapshotFailure) throw new Error('Snapshot failed');
+        const result = structuredClone({ sessions, groups, warnings: window.snapshotWarnings ?? [], groupError: window.groupFailure ? 'Broken groups' : '' });
         if (window.holdSnapshot) { window.holdSnapshot = false; await new Promise(resolve => { window.releaseSnapshot = resolve; }); }
         return result;
       }
       if (request.action === 'activities') {
+        if (window.claudeFailure) throw new Error('Claude status failed');
         if (window.claudePending) return new Promise(() => {});
         return { 'claude-key': { state: 'completed', detail: 'Main response completed', observed_at: Date.now() / 1000 }, ...window.extraActivities };
       }
-      if (request.action === 'codex-activities') return { 'codex-key': { state: window.codexState ?? 'working', detail: 'Codex turn state', observed_at: Date.now() / 1000 } };
+      if (request.action === 'codex-activities') {
+        if (window.codexFailure) throw new Error('Codex status failed');
+        return { 'codex-key': { state: window.codexState ?? 'working', detail: 'Codex turn state', observed_at: Date.now() / 1000 } };
+      }
       if (request.action === 'open') { await new Promise(resolve => setTimeout(resolve, window.openDelay ?? 300)); if (window.openFailure) throw new Error('Desktop link failed'); return { requested: true }; }
       if (['create-group', 'assign-session', 'assign-group'].includes(request.action) && window.saveFailure) throw new Error('Group save failed');
       if (request.action === 'create-group') {
@@ -85,6 +90,136 @@ async function showDetails(page, row) {
   await row.click({ button: 'right' });
   await page.getByRole('menuitem', { name: '세션 상세' }).click();
 }
+
+async function disableAutoRefresh(page) {
+  await page.getByRole('button', { name: '설정', exact: true }).click();
+  await page.getByRole('checkbox', { name: '자동 갱신 사용' }).uncheck();
+  await page.getByRole('button', { name: /전체 세션/ }).click();
+}
+
+async function setupWithClock(page) {
+  // 모든 앱 타이머를 가상 시계로 생성한 뒤 페이지 로딩을 마치고 멈춘다.
+  await page.clock.install();
+  await setup(page);
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
+}
+
+test('refresh settings live in their own screen and persist across reloads', async ({ page }) => {
+  await setup(page);
+  const refreshButton = page.getByRole('button', { name: '↻ 새로고침', exact: true });
+  await expect(page.locator('header input[type="checkbox"]')).toHaveCount(0);
+  await expect(page.getByRole('img', { name: '자동 갱신 정상' })).toBeVisible();
+  const position = await refreshButton.boundingBox();
+  await page.getByRole('button', { name: '설정', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '설정', exact: true })).toBeVisible();
+  await expect(page.locator('.session-panel')).toHaveCount(0);
+  const interval = page.getByRole('spinbutton', { name: '자동 갱신 주기' });
+  await expect(interval).toHaveValue('5');
+  await interval.fill('12');
+  await interval.press('Tab');
+  await page.getByRole('checkbox', { name: '자동 갱신 사용' }).uncheck();
+  await expect(page.locator('.refresh-led')).toHaveCount(0);
+  expect(await refreshButton.boundingBox()).toEqual(position);
+  await page.reload();
+  await page.getByRole('button', { name: '설정', exact: true }).click();
+  await expect(page.getByRole('checkbox', { name: '자동 갱신 사용' })).not.toBeChecked();
+  await expect(interval).toHaveValue('12');
+  await expect(page.locator('.refresh-led')).toHaveCount(0);
+  await page.setViewportSize({ width: 960, height: 640 });
+  await expect(interval).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: 'test-results/desktop-refresh-settings-minimum.png' });
+});
+
+test('changing the interval replaces the timer and disabling it leaves manual refresh working', async ({ page }) => {
+  await setupWithClock(page);
+  await page.getByRole('button', { name: '설정', exact: true }).click();
+  const interval = page.getByRole('spinbutton', { name: '자동 갱신 주기' });
+  const snapshots = () => page.evaluate(() => window.desktopCalls.filter(c => c.action === 'snapshot').length);
+  await interval.fill('10');
+  await interval.press('Tab');
+  const initial = await snapshots();
+  await page.clock.runFor(9999);
+  expect(await snapshots()).toBe(initial);
+  await page.clock.runFor(1);
+  await expect.poll(snapshots).toBe(initial + 1);
+  await interval.fill('2');
+  await interval.press('Tab');
+  await page.clock.runFor(2000);
+  await expect.poll(snapshots).toBe(initial + 2);
+  await page.getByRole('checkbox', { name: '자동 갱신 사용' }).uncheck();
+  await page.clock.runFor(20000);
+  expect(await snapshots()).toBe(initial + 2);
+  await page.getByRole('button', { name: '↻ 새로고침', exact: true }).click();
+  await expect.poll(snapshots).toBe(initial + 3);
+  await page.getByRole('checkbox', { name: '자동 갱신 사용' }).check();
+  await page.clock.runFor(2000);
+  await expect.poll(snapshots).toBe(initial + 4);
+  await expect(page.getByRole('img', { name: '자동 갱신 정상' })).toBeVisible();
+});
+
+test('invalid intervals never replace the last valid refresh interval', async ({ page }) => {
+  await setup(page);
+  await page.getByRole('button', { name: '설정', exact: true }).click();
+  const interval = page.getByRole('spinbutton', { name: '자동 갱신 주기' });
+  for (const value of ['', '0', '-1', '1.5', '3601']) {
+    await interval.fill(value);
+    await interval.press('Tab');
+    expect(await interval.evaluate(input => input.validity.valid)).toBe(false);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('desktop-session-manager.refresh-settings') || 'null'))).toBeNull();
+  }
+  await page.reload();
+  await page.getByRole('button', { name: '설정', exact: true }).click();
+  await expect(interval).toHaveValue('5');
+});
+
+for (const failure of ['snapshotFailure', 'groupFailure', 'claudeFailure', 'codexFailure', 'snapshotWarnings']) {
+  test(`refresh LED shows and recovers from ${failure}`, async ({ page }) => {
+    await setupWithClock(page);
+    await page.evaluate(failure => { window[failure] = failure === 'snapshotWarnings' ? ['Provider read failed'] : true; }, failure);
+    await page.clock.runFor(5000);
+    const led = page.getByRole('img', { name: '자동 갱신 오류' });
+    await expect(led).toHaveCSS('background-color', 'rgb(239, 68, 68)');
+    await expect(page.getByRole('button', { name: '↻ 새로고침', exact: true })).toBeVisible();
+    await page.evaluate(failure => { window[failure] = failure === 'snapshotWarnings' ? [] : false; }, failure);
+    await page.clock.runFor(5000);
+    await expect(page.getByRole('img', { name: '자동 갱신 정상' })).toHaveCSS('background-color', 'rgb(52, 211, 153)');
+  });
+}
+
+test('refresh LED stays green while polling and stays red until all provider errors recover', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => { window.holdSnapshot = true; });
+  const refreshButton = page.getByRole('button', { name: '↻ 새로고침', exact: true });
+  await refreshButton.click();
+  await expect(refreshButton).toBeDisabled();
+  await expect(page.getByRole('img', { name: '자동 갱신 정상' })).toHaveCSS('background-color', 'rgb(52, 211, 153)');
+  await page.evaluate(() => { window.claudeFailure = true; window.codexFailure = true; window.releaseSnapshot(); });
+  await expect(page.getByRole('img', { name: '자동 갱신 오류' })).toBeVisible();
+  await page.evaluate(() => { window.claudeFailure = false; });
+  await refreshButton.click();
+  await expect(page.getByRole('alert')).toHaveCount(1);
+  await expect(page.getByRole('img', { name: '자동 갱신 오류' })).toBeVisible();
+  await page.screenshot({ path: 'test-results/desktop-refresh-error.png' });
+  await page.evaluate(() => { window.codexFailure = false; });
+  await refreshButton.click();
+  await expect(page.getByRole('img', { name: '자동 갱신 정상' })).toBeVisible();
+});
+
+test('automatic polling does not change the refresh button appearance or green LED', async ({ page }) => {
+  await setupWithClock(page);
+  await page.evaluate(() => { window.holdSnapshot = true; });
+  const refreshButton = page.getByRole('button', { name: '↻ 새로고침', exact: true });
+  const opacity = await refreshButton.evaluate(button => getComputedStyle(button).opacity);
+  await page.clock.runFor(5000);
+  await expect.poll(() => page.evaluate(() => typeof window.releaseSnapshot)).toBe('function');
+  await expect(refreshButton).toBeEnabled();
+  await expect(refreshButton).toHaveCSS('opacity', opacity);
+  await expect(page.getByRole('img', { name: '자동 갱신 정상' })).toHaveCSS('background-color', 'rgb(52, 211, 153)');
+  await page.clock.runFor(10000);
+  expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'snapshot').length)).toBe(2);
+  await page.evaluate(() => window.releaseSnapshot());
+});
 
 const childSessions = [
   { key: 'child-aw', member: ['claude', 'account', 'child-aw'], provider: 'claude', id: 'child-aw', title: 'Benchmark AW task', childName: 't3-aw', parentKey: 'claude-key', cwd: 'D:/bench/t3-aw', environment: 'local', host: 'local', lastActivity: 1793300002000 },
@@ -224,7 +359,7 @@ test('Desktop dashboard fits the minimum window size', async ({ page }) => {
 test('old activity becomes unknown when automatic refresh is off', async ({ page }) => {
   await setup(page);
   await expect(page.locator('.badge.completed')).toHaveCount(1);
-  await page.getByRole('checkbox', { name: '자동 갱신 · 5초' }).uncheck();
+  await disableAutoRefresh(page);
   await page.clock.install();
   await page.clock.fastForward(16000);
   await expect(page.locator('.badge.completed')).toHaveCount(0);
@@ -251,7 +386,7 @@ test('Codex observation expires without automatic refresh', async ({ page }) => 
   await setup(page);
   const codex = page.locator('.session-row').filter({ hasText: 'Session manager UI' });
   await expect(codex.locator('.badge')).toHaveText('작업 중');
-  await page.getByRole('checkbox', { name: '자동 갱신 · 5초' }).uncheck();
+  await disableAutoRefresh(page);
   await page.clock.install();
   await page.clock.fastForward(16000);
   await expect(codex.locator('.badge')).toHaveText('확인 불가');
@@ -566,7 +701,7 @@ test('a collapsed familys working summary expires with its child observation', a
   await setup(page, { extraSessions: childSessions, initialRows: 2, childStates: { 'child-aw': 'working' } });
   const parent = page.locator('[data-session-key="claude-key"]');
   await expect(parent.locator('.descendant-working')).toContainText('1개 작업 중');
-  await page.getByRole('checkbox', { name: '자동 갱신 · 5초' }).uncheck();
+  await disableAutoRefresh(page);
   await page.clock.install();
   await page.clock.fastForward(16000);
   await expect(parent.locator('.descendant-working')).toHaveCount(0);
@@ -747,7 +882,7 @@ test('sidebar hides counts and adds groups from the My Groups heading while reta
     { key: 'mixed', member: ['codex', 'local', 'mixed'], provider: 'codex', id: 'mixed', title: 'Shared review', cwd: 'D:/Projects/Inspector', environment: 'ssh', host: 'build-host', lastActivity: 1793300000000 },
   ] });
   await expect(page.locator('aside .sidebar-label')).toHaveText(['WORKSPACE', 'My Groups ＋', 'Groups']);
-  await expect(page.locator('aside > .nav-row > span:last-child')).toHaveText(['전체 세션', 'Claude Desktop', 'Codex Desktop']);
+  await expect(page.locator('aside > .nav-row > span:last-child')).toHaveText(['전체 세션', 'Claude Desktop', 'Codex Desktop', '설정']);
   await expect(page.locator('aside .group-count, aside .nav-row > small')).toHaveCount(0);
   const manual = page.getByRole('region', { name: 'My Groups', exact: true });
   const automatic = page.getByRole('region', { name: 'Groups', exact: true });

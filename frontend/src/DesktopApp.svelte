@@ -30,9 +30,16 @@
   let groupRevision = 0;
   let menuElement: HTMLDivElement;
   let loading = false;
+  let manualRefreshing = false;
   let opening = false;
   let activityLoading = { claude: false, codex: false };
   let autoRefresh = true;
+  let refreshIntervalSeconds = 5;
+  let showSettings = false;
+  let settingsError = '';
+  let mounted = false;
+  let refreshTimer: ReturnType<typeof setInterval> | undefined;
+  const refreshSettingsKey = 'desktop-session-manager.refresh-settings';
   let activities: Record<string, Activity> = {};
   let now = Date.now();
   let groupName = '';
@@ -52,6 +59,24 @@
     return host.go.main.App.Call({ action, ...payload });
   }
 
+  function saveRefreshSettings() {
+    try {
+      localStorage.setItem(refreshSettingsKey, JSON.stringify({ autoRefresh, refreshIntervalSeconds }));
+      settingsError = '';
+    } catch { settingsError = '설정을 저장하지 못했습니다. 현재 창에는 적용되지만 앱을 다시 열면 유지되지 않을 수 있습니다.'; }
+  }
+
+  function updateRefreshInterval(input: HTMLInputElement) {
+    if (!input.reportValidity()) return;
+    refreshIntervalSeconds = input.valueAsNumber;
+    saveRefreshSettings();
+  }
+
+  function configureRefresh(enabled: boolean, seconds: number) {
+    clearInterval(refreshTimer);
+    refreshTimer = enabled ? setInterval(() => void refresh(), seconds * 1000) : undefined;
+  }
+
   function activity(session: Session, timestamp: number): Activity {
     const observed = activities[session.key];
     if (!observed || timestamp / 1000 - observed.observed_at > 15) return { state: 'unknown', detail: '아직 상태를 확인하지 않았거나 마지막 관찰이 15초 이상 지연되었습니다.', observed_at: 0 };
@@ -69,9 +94,10 @@
     finally { activityLoading = { ...activityLoading, [provider]: false }; }
   }
 
-  async function refresh() {
+  async function refresh(manual = false) {
     if (loading) return;
     loading = true;
+    manualRefreshing = manual;
     const revision = groupRevision;
     try {
       const data = await call<Snapshot>('snapshot');
@@ -85,7 +111,7 @@
       void refreshActivities('claude');
       void refreshActivities('codex');
     } catch (failure) { refreshError = `목록 조회 실패: ${String(failure)}`; }
-    finally { loading = false; }
+    finally { loading = false; manualRefreshing = false; }
   }
 
   async function openSession(session: Session) {
@@ -160,7 +186,7 @@
   function updateGroups(updated: Group[]) { groupRevision += 1; groups = updated; }
 
   function chooseGroup(group: GroupView) {
-    scope = group.id; selectedKey = '';
+    scope = group.id; selectedKey = ''; showSettings = false;
     if (!group.automatic) groupEditName = group.name;
   }
 
@@ -222,12 +248,20 @@
   }).map(session => session.key));
   $: if (query !== lastQuery || scope !== lastScope) { lastQuery = query; lastScope = scope; searchCollapsed = new Set(); }
   $: rows = sessionTreeRows(tree, scopedKeys, query, expandedKeys, searchCollapsed, projectNames);
+  $: refreshFailed = !!refreshError || !!groupError || !!activityErrors.claude || !!activityErrors.codex || warnings.length > 0;
+  $: refreshStatus = refreshFailed ? '자동 갱신 오류' : '자동 갱신 정상';
+  $: if (mounted) configureRefresh(autoRefresh, refreshIntervalSeconds);
 
   onMount(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(refreshSettingsKey) || 'null');
+      if (typeof saved?.autoRefresh === 'boolean') autoRefresh = saved.autoRefresh;
+      if (Number.isInteger(saved?.refreshIntervalSeconds) && saved.refreshIntervalSeconds >= 1 && saved.refreshIntervalSeconds <= 3600) refreshIntervalSeconds = saved.refreshIntervalSeconds;
+    } catch { /* 저장된 설정을 읽지 못하면 기본값을 사용한다. */ }
+    mounted = true;
     void refresh();
     const timer = setInterval(() => { now = Date.now(); }, 1000);
-    const refreshTimer = setInterval(() => { if (autoRefresh) void refresh(); }, 5000);
-    return () => { clearInterval(timer); clearInterval(refreshTimer); };
+    return () => { mounted = false; clearInterval(timer); clearInterval(refreshTimer); };
   });
 </script>
 
@@ -244,8 +278,8 @@
     <div class="brand"><img src={logo} alt="Agent Session Manager" /><div><strong>Agent Session Manager</strong><span>DESKTOP SESSIONS</span></div></div>
     <div class="header-tools" style="--wails-draggable:no-drag">
       <label class="search"><span>⌕</span><input aria-label="세션 검색" bind:value={query} placeholder="세션, 폴더, 호스트 검색…" /></label>
-      <label class="auto-refresh"><input type="checkbox" bind:checked={autoRefresh} /> 자동 갱신 · 5초</label>
-      <button class="refresh" on:click={refresh} disabled={loading}>{loading ? '조회 중…' : '↻ 새로고침'}</button>
+      <span class="refresh-indicator">{#if autoRefresh}<span class="refresh-led" class:failed={refreshFailed} role="img" aria-label={refreshStatus} title={refreshStatus}></span>{/if}</span>
+      <button class="refresh" on:click={() => refresh(true)} disabled={manualRefreshing}>↻ 새로고침</button>
       <button class="window-button" aria-label="최소화" on:click={WindowMinimise}>—</button>
       <button class="window-button" aria-label="최대화" on:click={WindowToggleMaximise}>□</button>
       <button class="window-button close" aria-label="닫기" on:click={Quit}>×</button>
@@ -256,7 +290,7 @@
     <aside>
       <div class="sidebar-label">WORKSPACE</div>
       {#each [['all', '전체 세션'], ['claude', 'Claude Desktop'], ['codex', 'Codex Desktop']] as [id, name]}
-        <button class="nav-row" class:active={scope === id} on:click={() => { scope = id; selectedKey = ''; }}>
+        <button class="nav-row" class:active={!showSettings && scope === id} on:click={() => { scope = id; selectedKey = ''; showSettings = false; }}>
           {#if id === 'all'}<span class="grid-icon">▦</span>{:else}<AgentIcon agent={id} size="sm" />{/if}
           <span>{name}</span>
         </button>
@@ -275,7 +309,7 @@
           {/if}
           <div class="groups-list">
             {#each sectionGroups as group (group.id)}
-              <button class="nav-row group-row" class:active={scope === group.id} data-group-id={group.id} data-group-kind={group.automatic ? 'automatic' : 'user'}
+              <button class="nav-row group-row" class:active={!showSettings && scope === group.id} data-group-id={group.id} data-group-kind={group.automatic ? 'automatic' : 'user'}
                 title={`${group.name} · ${group.hint}`} on:click={() => chooseGroup(group)}
                 on:contextmenu={event => showSessionMenu(event, { kind: 'group', source: group.source })}
                 on:keydown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) void showSessionMenu(event, { kind: 'group', source: group.source }); }} aria-haspopup="menu">
@@ -285,6 +319,7 @@
           </div>
         </section>
       {/each}
+      <button class="nav-row settings-nav" class:active={showSettings} on:click={() => { showSettings = true; closeSessionMenu(); }}><span class="grid-icon" aria-hidden="true">⚙</span><span>설정</span></button>
       <div class="sidebar-footer"><span class="connection-dot"></span> Local desktop connections</div>
     </aside>
 
@@ -295,6 +330,19 @@
       {#if groupError}<div role="alert" class="banner error">그룹 파일을 읽지 못했습니다. {groupError}</div>{/if}
       {#if warnings.length}<details class="banner warning"><summary>조회 알림 {warnings.length}개</summary>{#each warnings as warning}<p>{warning}</p>{/each}</details>{/if}
       {#if notice}<div role="status" class="banner success">{notice}</div>{/if}
+      {#if showSettings}
+        <section class="settings-panel" aria-labelledby="settings-title">
+          <h2 id="settings-title">설정</h2>
+          <p class="settings-description">자동 갱신 설정은 변경 즉시 적용됩니다.</p>
+          {#if settingsError}<div role="alert" class="banner error">{settingsError}</div>{/if}
+          <div class="settings-card">
+            <h3>자동 갱신</h3>
+            <label class="settings-row" for="auto-refresh"><span>자동 갱신 사용<small>세션 목록과 실행 상태를 주기적으로 갱신합니다.</small></span><input id="auto-refresh" type="checkbox" checked={autoRefresh} on:change={event => { autoRefresh = event.currentTarget.checked; saveRefreshSettings(); }} /></label>
+            <div class="settings-row"><label for="refresh-interval">자동 갱신 주기<small>1~3600초 사이의 정수로 설정합니다.</small></label><div class="interval-input"><input id="refresh-interval" type="number" min="1" max="3600" step="1" required value={refreshIntervalSeconds} on:change={event => updateRefreshInterval(event.currentTarget)} /><span>초</span></div></div>
+            <p class="settings-hint">자동 갱신을 켜면 상단 LED가 초록색으로 유지되며, 조회 오류가 발생하면 빨간색으로 표시됩니다.</p>
+          </div>
+        </section>
+      {:else}
       {#if selectedGroup && !selected}
         <h2 class="selected-group-name">{selectedGroup.name}</h2>
         <form class="group-tools" on:submit|preventDefault={() => groupAction('rename-group', { id: selectedGroup.id, name: groupEditName })}>
@@ -369,6 +417,7 @@
         </section>
       {/if}
       <footer>{activityLoading.claude || activityLoading.codex ? '실행 상태 확인 중…' : '완료 상태는 최근 응답의 정상 종료를 뜻합니다.'}<span>대화는 각 Desktop 앱에서 실행됩니다.</span></footer>
+      {/if}
     </main>
   </div>
   {#if sessionMenu}
@@ -397,7 +446,13 @@
   .new-group { display:flex; margin:8px 8px 0; gap:4px; } .new-group input { width:100%; border:1px solid #ffffff10; border-radius:6px; background:var(--bg-sunken); padding:8px; font-size:11px; } .new-group button { background:rgba(var(--accent-rgb),.12); border:0; border-radius:6px; color:var(--accent-light); padding:0 8px; flex-shrink:0; } summary { cursor:pointer; } .sidebar-footer { margin-top:auto; padding:16px 10px 4px; border-top:1px solid #ffffff0a; color:#71717a; font-size:10px; display:flex; align-items:center; gap:7px; } .connection-dot { width:5px; height:5px; border-radius:50%; background:#34d399; }
   .selected-group-name { margin:0 0 14px; font-size:18px; line-height:1.5; overflow-wrap:anywhere; }
   .group-tools { display:flex; gap:8px; margin-bottom:18px; } .group-tools input { flex:1; min-width:0; background:var(--bg-raised); border:1px solid #ffffff18; padding:8px 12px; border-radius:7px; } .group-tools button,.warning button { background:#ffffff06; border:1px solid #ffffff18; padding:8px 12px; border-radius:7px; } .warning button { margin:8px 0 0 8px; }
-  main { flex:1; min-width:0; overflow-y:auto; padding:32px 34px 16px; } .auto-refresh { display:flex; align-items:center; gap:8px; color:#a1a1aa; font-size:11px; white-space:nowrap; } input[type=checkbox] { accent-color:var(--accent); }
+  main { flex:1; min-width:0; overflow-y:auto; padding:32px 34px 16px; } input[type=checkbox] { accent-color:var(--accent); }
+  .refresh-indicator { display:flex; align-items:center; justify-content:center; width:18px; flex-shrink:0; } .refresh-led { width:9px; height:9px; border-radius:50%; background:#34d399; box-shadow:0 0 7px #34d39966; } .refresh-led.failed { background:#ef4444; box-shadow:0 0 7px #ef444466; }
+  .settings-nav { margin-top:auto; } .settings-nav + .sidebar-footer { margin-top:12px; }
+  .settings-panel { max-width:720px; } .settings-panel h2 { margin:0; font-size:22px; } .settings-description { color:#a1a1aa; margin:10px 0 24px; font-size:12px; }
+  .settings-card { padding:24px; border:1px solid #ffffff12; border-radius:12px; background:rgba(var(--bg-base-rgb),.42); } .settings-card h3 { margin:0 0 8px; font-size:14px; }
+  .settings-row { display:flex; align-items:center; justify-content:space-between; gap:24px; padding:20px 0; border-bottom:1px solid #ffffff0a; } .settings-row small { display:block; margin-top:7px; font-size:11px; color:#a1a1aa; } .settings-row input[type=checkbox] { width:18px; height:18px; flex-shrink:0; cursor:pointer; }
+  .interval-input { display:flex; align-items:center; gap:8px; color:#a1a1aa; } .interval-input input { width:88px; padding:8px 10px; background:var(--bg-sunken); border:1px solid #ffffff20; border-radius:6px; } .interval-input input:invalid { border-color:#ef4444; } .settings-hint { margin:18px 0 0; font-size:11px; line-height:1.7; color:#a1a1aa; }
   .session-panel { border:1px solid #ffffff0c; border-radius:12px; overflow:hidden; background:rgba(var(--bg-base-rgb),.42); } .panel-heading { display:flex; justify-content:space-between; align-items:center; padding:18px 20px; border-bottom:1px solid #ffffff0a; } .panel-heading h2 { font-size:13px; font-weight:600; } .panel-heading > span { font-size:10px; color:#71717a; }
   .nav-row .project-root-hint { display:block; overflow:hidden; text-overflow:ellipsis; font-size:10px; margin-top:5px; }
   .group-name { display:block; overflow:hidden; text-overflow:ellipsis; } .group-row :global(.agent-icon) { flex-shrink:0; }
