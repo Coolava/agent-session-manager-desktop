@@ -36,6 +36,8 @@
   let activities: Record<string, Activity> = {};
   let now = Date.now();
   let groupName = '';
+  let showNewGroup = false;
+  let groupNameInput: HTMLInputElement;
   let groupEditName = '';
   let deletingGroup: Group | null = null;
   let targetGroup = '';
@@ -179,11 +181,16 @@
     groupBusy = true; error = '';
     try {
       const result = await call<Group | Group[]>(action, payload);
-      if (action === 'create-group') { targetGroup = (result as Group).id; groupName = ''; updateGroups([...groups, result as Group]); }
+      if (action === 'create-group') { targetGroup = (result as Group).id; groupName = ''; showNewGroup = false; updateGroups([...groups, result as Group]); }
       else updateGroups(result as Group[]);
       await refresh();
     } catch (failure) { error = String(failure); }
     finally { groupBusy = false; }
+  }
+
+  async function toggleNewGroup() {
+    showNewGroup = !showNewGroup;
+    if (showNewGroup) { await tick(); groupNameInput.focus(); }
   }
 
   function folder(path: string) { return path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path || '작업 폴더 없음'; }
@@ -251,29 +258,31 @@
       {#each [['all', '전체 세션'], ['claude', 'Claude Desktop'], ['codex', 'Codex Desktop']] as [id, name]}
         <button class="nav-row" class:active={scope === id} on:click={() => { scope = id; selectedKey = ''; }}>
           {#if id === 'all'}<span class="grid-icon">▦</span>{:else}<AgentIcon agent={id} size="sm" />{/if}
-          <span>{name}</span><small>{id === 'all' ? sessions.length : sessions.filter(s => s.provider === id).length}</small>
+          <span>{name}</span>
         </button>
       {/each}
       {#each [{ name: 'My Groups', automatic: false }, { name: 'Groups', automatic: true }] as section (section.name)}
         {@const sectionGroups = groupResolution.views.filter(group => group.automatic === section.automatic)}
         <section aria-label={section.name}>
-          <div class="sidebar-label spaced">{section.name} <span>{sectionGroups.length}</span></div>
+          <div class="sidebar-label spaced">{section.name}
+            {#if !section.automatic}<button class="add-group" aria-label="새 그룹 추가" title="새 그룹 추가" aria-expanded={showNewGroup} aria-controls="new-group-form" on:click={toggleNewGroup} disabled={groupBusy || !!groupError}>＋</button>{/if}
+          </div>
+          {#if !section.automatic && showNewGroup}
+            <form id="new-group-form" class="new-group" on:submit|preventDefault={() => groupAction('create-group', { name: groupName })}>
+              <input aria-label="새 그룹 이름" bind:this={groupNameInput} bind:value={groupName} maxlength="100" placeholder="새 그룹 이름" disabled={groupBusy || !!groupError} />
+              <button aria-label="그룹 만들기" disabled={!groupName.trim() || groupBusy || !!groupError}>만들기</button>
+            </form>
+          {/if}
           <div class="groups-list">
             {#each sectionGroups as group (group.id)}
               <button class="nav-row group-row" class:active={scope === group.id} data-group-id={group.id} data-group-kind={group.automatic ? 'automatic' : 'user'}
                 title={`${group.name} · ${group.hint}`} on:click={() => chooseGroup(group)}
                 on:contextmenu={event => showSessionMenu(event, { kind: 'group', source: group.source })}
                 on:keydown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) void showSessionMenu(event, { kind: 'group', source: group.source }); }} aria-haspopup="menu">
-                <DesktopGroupIcon providers={group.providers} /><span><span class="group-name">{group.name}</span>{#if groupResolution.views.some(other => other.id !== group.id && other.name === group.name)}<small class="project-root-hint">{group.hint}</small>{/if}</span><small class="group-count">{group.keys.size}</small>
+                <DesktopGroupIcon providers={group.providers} /><span><span class="group-name">{group.name}</span>{#if groupResolution.views.some(other => other.id !== group.id && other.name === group.name)}<small class="project-root-hint">{group.hint}</small>{/if}</span>
               </button>
             {/each}
           </div>
-          {#if !section.automatic}
-            <form class="new-group" on:submit|preventDefault={() => groupAction('create-group', { name: groupName })}>
-              <input aria-label="새 그룹 이름" bind:value={groupName} maxlength="100" placeholder="새 그룹 이름" disabled={!!groupError} />
-              <button aria-label="그룹 만들기" disabled={!groupName.trim() || groupBusy || !!groupError}>＋</button>
-            </form>
-          {/if}
         </section>
       {/each}
       <div class="sidebar-footer"><span class="connection-dot"></span> Local desktop connections</div>
@@ -383,15 +392,15 @@
   .search { width:280px; display:flex; align-items:center; gap:9px; padding:9px 12px; background:var(--bg-surface); border:1px solid #ffffff15; border-radius:8px; color:#71717a; } input { min-width:0; color:#e4e4e7; } .search input { width:100%; background:none; border:0; outline:0; }
   .refresh,.group-assignment button { border:1px solid #ffffff18; border-radius:7px; padding:8px 13px; background:#ffffff06; } .window-button { border:0; background:none; width:32px; height:32px; font-size:17px; color:#a1a1aa; } .window-button:hover { background:#ffffff10; border-radius:6px; } .window-button.close:hover { background:#ef4444; color:white; }
   .workspace { flex:1; min-height:0; display:flex; } aside { width:272px; flex-shrink:0; display:flex; flex-direction:column; padding:22px 12px 12px; border-right:1px solid rgba(var(--accent-rgb),.12); background:var(--bg-surface); overflow-y:auto; }
-  .sidebar-label { display:flex; justify-content:space-between; color:#71717a; font-size:10px; letter-spacing:1.3px; font-weight:650; padding:0 12px 12px; } .spaced { margin-top:26px; } .sidebar-label span { color:#52525b; }
+  .sidebar-label { display:flex; align-items:center; justify-content:space-between; color:#71717a; font-size:10px; letter-spacing:1.3px; font-weight:650; padding:0 12px 12px; } .spaced { margin-top:26px; } .add-group { display:flex; align-items:center; justify-content:center; width:24px; height:24px; padding:0; border:0; border-radius:5px; background:none; color:var(--accent-light); font-size:18px; } .add-group:hover,.add-group:focus-visible { background:rgba(var(--accent-rgb),.12); }
   .nav-row { display:flex; align-items:center; gap:11px; width:100%; padding:11px 12px; text-align:left; border:1px solid transparent; border-radius:8px; background:none; margin-bottom:3px; } .nav-row:hover { background:#ffffff05; } .nav-row.active { background:rgba(var(--accent-rgb),.12); color:var(--accent-lighter); border-color:rgba(var(--accent-rgb),.22); } .nav-row > span:nth-child(2) { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .nav-row small { color:#71717a; font-size:11px; } .grid-icon { width:16px; color:var(--accent-light); font-size:17px; }
-  .new-group { display:flex; margin:8px 8px 0; gap:4px; } .new-group input { width:100%; border:1px solid #ffffff10; border-radius:6px; background:var(--bg-sunken); padding:8px; font-size:11px; } .new-group button { background:rgba(var(--accent-rgb),.12); border:0; border-radius:6px; color:var(--accent-light); width:30px; flex-shrink:0; } summary { cursor:pointer; } .sidebar-footer { margin-top:auto; padding:16px 10px 4px; border-top:1px solid #ffffff0a; color:#71717a; font-size:10px; display:flex; align-items:center; gap:7px; } .connection-dot { width:5px; height:5px; border-radius:50%; background:#34d399; }
+  .new-group { display:flex; margin:8px 8px 0; gap:4px; } .new-group input { width:100%; border:1px solid #ffffff10; border-radius:6px; background:var(--bg-sunken); padding:8px; font-size:11px; } .new-group button { background:rgba(var(--accent-rgb),.12); border:0; border-radius:6px; color:var(--accent-light); padding:0 8px; flex-shrink:0; } summary { cursor:pointer; } .sidebar-footer { margin-top:auto; padding:16px 10px 4px; border-top:1px solid #ffffff0a; color:#71717a; font-size:10px; display:flex; align-items:center; gap:7px; } .connection-dot { width:5px; height:5px; border-radius:50%; background:#34d399; }
   .selected-group-name { margin:0 0 14px; font-size:18px; line-height:1.5; overflow-wrap:anywhere; }
   .group-tools { display:flex; gap:8px; margin-bottom:18px; } .group-tools input { flex:1; min-width:0; background:var(--bg-raised); border:1px solid #ffffff18; padding:8px 12px; border-radius:7px; } .group-tools button,.warning button { background:#ffffff06; border:1px solid #ffffff18; padding:8px 12px; border-radius:7px; } .warning button { margin:8px 0 0 8px; }
   main { flex:1; min-width:0; overflow-y:auto; padding:32px 34px 16px; } .auto-refresh { display:flex; align-items:center; gap:8px; color:#a1a1aa; font-size:11px; white-space:nowrap; } input[type=checkbox] { accent-color:var(--accent); }
   .session-panel { border:1px solid #ffffff0c; border-radius:12px; overflow:hidden; background:rgba(var(--bg-base-rgb),.42); } .panel-heading { display:flex; justify-content:space-between; align-items:center; padding:18px 20px; border-bottom:1px solid #ffffff0a; } .panel-heading h2 { font-size:13px; font-weight:600; } .panel-heading > span { font-size:10px; color:#71717a; }
   .nav-row .project-root-hint { display:block; overflow:hidden; text-overflow:ellipsis; font-size:10px; margin-top:5px; }
-  .group-name { display:block; overflow:hidden; text-overflow:ellipsis; } .group-count { margin-left:auto; flex-shrink:0; } .group-row :global(.agent-icon) { flex-shrink:0; }
+  .group-name { display:block; overflow:hidden; text-overflow:ellipsis; } .group-row :global(.agent-icon) { flex-shrink:0; }
   .new-group { margin-bottom:20px; } .group-tools { flex-wrap:wrap; } .linked-groups { margin-bottom:20px; border:1px solid #ffffff12; padding:16px; border-radius:8px; } .linked-groups h3 { font-size:12px; margin:0; } .linked-groups p { font-size:11px; color:#a1a1aa; margin:8px 0 12px; } .linked-groups button { background:#ffffff06; border:1px solid #ffffff18; padding:8px 12px; border-radius:6px; margin:0 8px 8px 0; max-width:100%; overflow-wrap:anywhere; text-align:left; } .linked-groups button span { color:var(--accent-light); font-size:11px; margin-left:8px; }
   .table-heading,.session-row { display:grid; grid-template-columns:minmax(210px,1.5fr) minmax(130px,1fr) 85px 115px; gap:18px; align-items:center; } .table-heading { padding:12px 20px; color:#52525b; font-size:10px; background:#ffffff02; } .session-row { width:100%; background:none; border:0; border-top:1px solid #ffffff06; text-align:left; padding:16px 20px; } .session-row:hover { background:rgba(var(--accent-rgb),.07); } .session-title { min-width:0; display:flex; align-items:center; gap:12px; } .session-title > span { min-width:0; } .session-title strong { display:block; font-size:12px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .session-title small,.session-path small { display:block; color:#52525b; font-size:10px; margin-top:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .session-path { min-width:0; color:#a1a1aa; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } time { font-size:10px; color:#71717a; }
   .badge { display:inline-flex; justify-content:center; width:fit-content; gap:5px; font-size:10px; padding:4px 8px; border-radius:5px; background:#ffffff06; color:#71717a; white-space:nowrap; } .badge.working { background:#8b5cf61a; color:#c4b5fd; } .badge.completed { background:#10b98118; color:#34d399; } .badge.interrupted { background:#f59e0b18; color:#fbbf24; } .badge.idle { color:#a1a1aa; } .badge.error,.badge.refused { color:#fca5a5; background:#ef444418; }

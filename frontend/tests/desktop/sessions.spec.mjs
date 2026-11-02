@@ -6,6 +6,14 @@ const codexProjects = '.group-row[data-group-id*="codex-project"]';
 const combinedProjects = '.group-row[data-group-id*="combined-project"]';
 const groupRow = (page, name) => page.locator('.group-row').filter({ has: page.getByText(name, { exact: true }) });
 
+async function expectGroupSize(page, name, size) {
+  const previous = await page.locator('aside .nav-row.active').evaluate(element => ({ id: element.dataset.groupId, name: element.textContent.trim() }));
+  await groupRow(page, name).click();
+  await expect(page.locator('.session-row')).toHaveCount(size);
+  if (previous.id) await page.locator('.group-row').filter({ has: page.getByText(previous.name, { exact: true }) }).click();
+  else await page.getByRole('button', { name: previous.name, exact: true }).click();
+}
+
 async function setup(page, options = {}) {
   await page.addInitScript(options => {
     window.claudePending = options.claudePending;
@@ -185,6 +193,7 @@ test('opens the selected provider session once and reports a failed link request
 
 test('groups retain memberships across snapshot refresh', async ({ page }) => {
   await setup(page);
+  await page.getByRole('button', { name: '새 그룹 추가' }).click();
   await page.getByRole('textbox', { name: '새 그룹 이름' }).fill('Release work');
   await page.getByRole('button', { name: '그룹 만들기' }).click();
   await expect(groupRow(page, 'Release work')).toBeVisible();
@@ -253,7 +262,7 @@ test('a damaged group store disables editing while sessions remain visible', asy
   await page.evaluate(() => { window.groupFailure = true; });
   await page.getByRole('button', { name: '↻ 새로고침' }).click();
   await expect(page.getByRole('alert')).toContainText('Broken groups');
-  await expect(page.getByRole('textbox', { name: '새 그룹 이름' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '새 그룹 추가' })).toBeDisabled();
   await expect(page.locator('.session-row')).toHaveCount(2);
 });
 
@@ -540,6 +549,7 @@ test('tree connectors join parent buttons, continue through nested rows and stop
 
 test('a group containing only a child shows its ancestors without unrelated siblings', async ({ page }) => {
   await setup(page, { extraSessions: childSessions, initialRows: 2 });
+  await page.getByRole('button', { name: '새 그룹 추가' }).click();
   await page.getByRole('textbox', { name: '새 그룹 이름' }).fill('Child work');
   await page.getByRole('button', { name: '그룹 만들기' }).click();
   await page.locator('[data-session-key="claude-key"] .tree-toggle').click();
@@ -719,7 +729,8 @@ test('a manually grouped parent is context only in its unassigned childs automat
   await page.evaluate(() => { window.groupFailure = true; });
   await page.getByRole('button', { name: '↻ 새로고침' }).click();
   await expect(page.locator('.group-row[data-group-kind="automatic"]')).toHaveCount(0);
-  await expect(page.locator('aside .nav-row').filter({ hasText: 'Parent work' })).toContainText('1');
+  await expect(page.locator('.session-row')).toHaveCount(1);
+  await expect(groupRow(page, 'Parent work')).toBeVisible();
   await page.locator('aside .nav-row').filter({ hasText: '전체 세션' }).click();
   await expect(page.locator('.session-row')).toHaveCount(2);
 });
@@ -731,32 +742,46 @@ async function assignMenu(page, row) {
   return page.getByRole('dialog', { name: '그룹 할당' });
 }
 
-test('My Groups sits below Workspace and separates sorted user and automatic groups with actual Agent icons', async ({ page }) => {
+test('sidebar hides counts and adds groups from the My Groups heading while retaining sorted groups and Agent icons', async ({ page }) => {
   await setup(page, { groups: [{ id: 'zebra', name: 'Zebra group', members: [] }, { id: 'empty', name: 'Empty group', members: [] }], extraSessions: [
     { key: 'mixed', member: ['codex', 'local', 'mixed'], provider: 'codex', id: 'mixed', title: 'Shared review', cwd: 'D:/Projects/Inspector', environment: 'ssh', host: 'build-host', lastActivity: 1793300000000 },
   ] });
-  await expect(page.locator('aside .sidebar-label')).toHaveText(['WORKSPACE', 'My Groups 2', 'Groups 2']);
+  await expect(page.locator('aside .sidebar-label')).toHaveText(['WORKSPACE', 'My Groups ＋', 'Groups']);
+  await expect(page.locator('aside > .nav-row > span:last-child')).toHaveText(['전체 세션', 'Claude Desktop', 'Codex Desktop']);
+  await expect(page.locator('aside .group-count, aside .nav-row > small')).toHaveCount(0);
   const manual = page.getByRole('region', { name: 'My Groups', exact: true });
   const automatic = page.getByRole('region', { name: 'Groups', exact: true });
   await expect(manual.locator('.group-name')).toHaveText(['Empty group', 'Zebra group']);
   await expect(automatic.locator('.group-name')).toHaveText(['Inspector · build-host', 'SessionManager']);
   await expect(manual.locator('[data-group-kind="automatic"]')).toHaveCount(0);
   await expect(automatic.locator('[data-group-kind="user"]')).toHaveCount(0);
-  await expect(manual.getByRole('textbox', { name: '새 그룹 이름' })).toBeVisible();
+  await expect(manual.getByRole('textbox', { name: '새 그룹 이름' })).toHaveCount(0);
   await expect(automatic.getByRole('textbox', { name: '새 그룹 이름' })).toHaveCount(0);
   const shared = groupRow(page, 'Inspector · build-host');
-  await expect(shared.locator('.group-count')).toHaveText('2');
+  await expectGroupSize(page, 'Inspector · build-host', 2);
   await expect(shared.getByRole('img', { name: 'Claude · Codex' })).toBeVisible();
   await expect(shared.locator('.claude-half')).toHaveCSS('clip-path', 'inset(0px 50% 0px 0px)');
   await expect(shared.locator('.codex-half')).toHaveCSS('clip-path', 'inset(0px 0px 0px 50%)');
   await expect(groupRow(page, 'SessionManager').getByRole('img', { name: 'codex', exact: true })).toBeVisible();
-  await expect(groupRow(page, 'Empty group').locator('.group-count')).toHaveText('0');
-  await page.screenshot({ path: '../verification/desktop-my-groups.png' });
+  await expectGroupSize(page, 'Empty group', 0);
+  await page.setViewportSize({ width: 960, height: 640 });
+  await page.screenshot({ path: '../verification/desktop-sidebar-add-group.png' });
+  const add = manual.locator('.sidebar-label').getByRole('button', { name: '새 그룹 추가' });
+  await add.click();
+  await expect(add).toHaveAttribute('aria-expanded', 'true');
+  await expect(manual.getByRole('textbox', { name: '새 그룹 이름' })).toBeFocused();
+  await expect(manual.getByRole('button', { name: '그룹 만들기' })).toBeDisabled();
+  await add.click();
+  await expect(manual.getByRole('textbox', { name: '새 그룹 이름' })).toHaveCount(0);
+  await add.focus();
+  await page.keyboard.press('Enter');
   await manual.getByRole('textbox', { name: '새 그룹 이름' }).fill('New user group');
   await manual.getByRole('button', { name: '그룹 만들기' }).click();
   await expect(manual.locator('.group-name')).toHaveText(['Empty group', 'New user group', 'Zebra group']);
   await expect(automatic.locator('.group-name')).toHaveText(['Inspector · build-host', 'SessionManager']);
-  await expect(page.locator('aside .sidebar-label')).toHaveText(['WORKSPACE', 'My Groups 3', 'Groups 2']);
+  await expect(page.locator('aside .sidebar-label')).toHaveText(['WORKSPACE', 'My Groups ＋', 'Groups']);
+  await expect(manual.getByRole('textbox', { name: '새 그룹 이름' })).toHaveCount(0);
+  expect(await page.locator('aside').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
 });
 
 test('session assignment creates a group in the dialog, persists after reload and unassigns', async ({ page }) => {
@@ -768,17 +793,17 @@ test('session assignment creates a group in the dialog, persists after reload an
   await expect(dialog.getByRole('checkbox', { name: 'Release work' })).toBeChecked();
   await dialog.getByRole('button', { name: '할당 적용' }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(groupRow(page, 'Release work').locator('.group-count')).toHaveText('1');
-  await expect(groupRow(page, 'Release work').getByRole('img', { name: 'claude', exact: true })).toBeVisible();
   await expect(page.locator('[data-session-key="claude-key"] .session-row')).toBeFocused();
+  await expect(groupRow(page, 'Release work').getByRole('img', { name: 'claude', exact: true })).toBeVisible();
+  await expectGroupSize(page, 'Release work', 1);
   await page.reload();
-  await expect(groupRow(page, 'Release work').locator('.group-count')).toHaveText('1');
+  await expectGroupSize(page, 'Release work', 1);
   await expect(groupRow(page, 'Inspector · build-host')).toHaveCount(0);
   dialog = await assignMenu(page, page.locator('[data-session-key="claude-key"] .session-row'));
   await expect(dialog.getByRole('checkbox', { name: 'Release work' })).toBeChecked();
   await dialog.getByRole('checkbox', { name: 'Release work' }).uncheck();
   await dialog.getByRole('button', { name: '할당 적용' }).click();
-  await expect(groupRow(page, 'Release work').locator('.group-count')).toHaveText('0');
+  await expectGroupSize(page, 'Release work', 0);
   await expect(groupRow(page, 'Inspector · build-host')).toBeVisible();
   expect(await page.evaluate(() => window.desktopCalls.filter(call => call.action === 'open'))).toEqual([]);
 });
@@ -791,10 +816,10 @@ test('automatic group links persist, include new sessions, honor direct assignme
   await dialog.getByRole('button', { name: '할당 적용' }).click();
   await expect(groupRow(page, 'SessionManager')).toHaveCount(0);
   await page.reload();
-  await expect(groupRow(page, 'My project').locator('.group-count')).toHaveText('1');
+  await expectGroupSize(page, 'My project', 1);
   await page.evaluate(() => window.desktopSessions.push({ key: 'new', member: ['claude', 'account', 'new'], provider: 'claude', id: 'new', title: 'Future session', cwd: 'D:/Projects/SessionManager', environment: 'local', host: 'local', lastActivity: 1793300000000 }));
   await page.getByRole('button', { name: '↻ 새로고침' }).click();
-  await expect(groupRow(page, 'My project').locator('.group-count')).toHaveText('2');
+  await expectGroupSize(page, 'My project', 2);
   await expect(groupRow(page, 'My project').getByRole('img', { name: 'Claude · Codex' })).toBeVisible();
   await groupRow(page, 'My project').click();
   await expect(page.locator('.session-row')).toHaveCount(2);
@@ -803,8 +828,8 @@ test('automatic group links persist, include new sessions, honor direct assignme
   await expect(dialog.getByRole('checkbox', { name: 'My project' })).not.toBeChecked();
   await dialog.getByRole('checkbox', { name: 'Direct work' }).check();
   await dialog.getByRole('button', { name: '할당 적용' }).click();
-  await expect(groupRow(page, 'My project').locator('.group-count')).toHaveText('1');
-  await expect(groupRow(page, 'Direct work').locator('.group-count')).toHaveText('1');
+  await expectGroupSize(page, 'My project', 1);
+  await expectGroupSize(page, 'Direct work', 1);
   await expect(groupRow(page, 'My project').getByRole('img', { name: 'codex', exact: true })).toBeVisible();
   await page.getByRole('region', { name: '연결된 그룹' }).getByRole('button', { name: /SessionManager/ }).click();
   dialog = page.getByRole('dialog');
@@ -812,7 +837,7 @@ test('automatic group links persist, include new sessions, honor direct assignme
   await dialog.getByRole('checkbox', { name: 'My project' }).uncheck();
   await dialog.getByRole('button', { name: '할당 적용' }).click();
   await expect(groupRow(page, 'SessionManager')).toBeVisible();
-  await expect(groupRow(page, 'My project').locator('.group-count')).toHaveText('0');
+  await expectGroupSize(page, 'My project', 0);
   expect(await page.evaluate(() => window.desktopGroups.find(group => group.id === 'linked').links)).toEqual([]);
 });
 
@@ -825,7 +850,7 @@ test('user group links aggregate members, block cycles and clean references on d
   await expect(dialog.getByRole('checkbox', { name: 'Child 연결 불가' })).toBeDisabled();
   await dialog.getByRole('checkbox', { name: 'Parent', exact: true }).check();
   await dialog.getByRole('button', { name: '할당 적용' }).click();
-  await expect(groupRow(page, 'Parent').locator('.group-count')).toHaveText('2');
+  await expectGroupSize(page, 'Parent', 2);
   dialog = await assignMenu(page, groupRow(page, 'Parent'));
   await expect(dialog.getByRole('checkbox', { name: 'Child 연결 불가' })).toBeDisabled();
   await page.keyboard.press('Escape');
@@ -833,7 +858,7 @@ test('user group links aggregate members, block cycles and clean references on d
   await groupRow(page, 'Child').click();
   await page.getByRole('button', { name: '그룹 삭제', exact: true }).click();
   await page.getByRole('button', { name: '삭제 확인' }).click();
-  await expect(groupRow(page, 'Parent').locator('.group-count')).toHaveText('1');
+  await expectGroupSize(page, 'Parent', 1);
   await expect(groupRow(page, 'Inspector · build-host')).toBeVisible();
   expect(await page.evaluate(() => window.desktopGroups[0].links)).toEqual([]);
 });
@@ -855,7 +880,7 @@ test('failed assignment retains a created group and dialog choices for retry', a
   await page.evaluate(() => { window.saveFailure = false; });
   await dialog.getByRole('button', { name: '할당 적용' }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(groupRow(page, 'Created first').locator('.group-count')).toHaveText('1');
+  await expectGroupSize(page, 'Created first', 1);
 });
 
 test('a vanished session or deleted selected group prevents silent assignment', async ({ page }) => {
@@ -869,7 +894,7 @@ test('a vanished session or deleted selected group prevents silent assignment', 
   await dialog.getByRole('button', { name: '사라진 그룹 선택 해제' }).click();
   await dialog.getByRole('checkbox', { name: 'B', exact: true }).check();
   await dialog.getByRole('button', { name: '할당 적용' }).click();
-  await expect(groupRow(page, 'B').locator('.group-count')).toHaveText('1');
+  await expectGroupSize(page, 'B', 1);
   dialog = await assignMenu(page, page.locator('[data-session-key="claude-key"] .session-row'));
   await page.evaluate(() => window.desktopSessions.splice(0, 1));
   await page.clock.fastForward(5000);
@@ -911,8 +936,8 @@ test('dialog supports keyboard focus trapping, multiple choices and long names i
   expect(close.x).toBeGreaterThan(heading.x + heading.width);
   await page.screenshot({ path: '../verification/desktop-group-assignment.png' });
   await dialog.getByRole('button', { name: '할당 적용' }).click();
-  await expect(groupRow(page, 'Design review').locator('.group-count')).toHaveText('1');
-  await expect(groupRow(page, 'Release readiness').locator('.group-count')).toHaveText('1');
+  await expectGroupSize(page, 'Design review', 1);
+  await expectGroupSize(page, 'Release readiness', 1);
 });
 
 test('an older in-flight snapshot cannot overwrite a completed assignment', async ({ page }) => {
@@ -924,10 +949,10 @@ test('an older in-flight snapshot cannot overwrite a completed assignment', asyn
   await page.clock.fastForward(5000);
   await expect.poll(() => page.evaluate(() => typeof window.releaseSnapshot)).toBe('function');
   await dialog.getByRole('button', { name: '할당 적용' }).click();
-  await expect(groupRow(page, 'A').locator('.group-count')).toHaveText('1');
+  await expectGroupSize(page, 'A', 1);
   await page.evaluate(() => window.releaseSnapshot());
   await expect(page.getByRole('button', { name: '↻ 새로고침' })).toBeEnabled();
-  await expect(groupRow(page, 'A').locator('.group-count')).toHaveText('1');
+  await expectGroupSize(page, 'A', 1);
 });
 
 test('a group read failure or vanished user group disables the open assignment dialog', async ({ page }) => {

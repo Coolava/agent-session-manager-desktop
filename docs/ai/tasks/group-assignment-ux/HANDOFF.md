@@ -75,3 +75,13 @@
 - npm run check: 오류 0개, 기존 경고 111개/29개 파일. Windows 빌드 성공, 실행 파일 갱신. verification/desktop-my-groups.png를 시각 확인했다.
 - README와 최신 SPEC R-021, WORKING-SPEC S-014, CURRENT_TASK를 동기화했다. 과거 승인 PLAN에는 후속 변경 안내를 추가했다.
 - 기존 검증 캡처 재생성분은 시작 상태로 복원하고 새 캡처만 포함한다. diff --check와 변경 범위 자체 검토 후 이번 변경만 별도 커밋한다. 기존 미추적 backup은 제외한다.
+
+## 후속 수정 — 왼쪽 개수 제거와 그룹 추가 위치 이동
+
+- 날짜: 2026-11-02 (Asia/Seoul). 요청: “좌측 Panel에서 숫자정보 제거. My groups에서 새 그룹 추가 기능 위치 이동. (My Groups 숫자정보 표시 위치에 + 버튼으로 추가)”. 작은 표시 변경으로 직접 구현했다.
+- WORKSPACE 세션 개수, My Groups/Groups 영역별 그룹 개수, 각 그룹의 소속 세션 개수를 제거했다. 그룹 이름·경로에 포함된 숫자는 유지한다. 앞선 문서의 사이드바 개수 표시 기준은 이번 요청으로 대체한다.
+- My Groups 제목 오른쪽에 접근 가능한 `새 그룹 추가` + 버튼을 배치했다. 클릭/Enter로 제목 아래 입력칸을 열고 포커스를 이동한다. 다시 누르면 닫히고 생성 성공 후에도 닫힌다. 실패 시 입력을 유지하고, 저장 중이나 그룹 읽기 실패 시 생성을 차단한다. 기존 생성 action·할당 모달·분류·저장은 유지했다.
+- Desktop Playwright 전체 44개 통과. 기존 숫자 표시 기반 소속 검증은 그룹을 선택한 실제 세션 목록 개수 검증으로 바꿨다. 숫자 제거, 버튼 위치·토글·키보드·초기 포커스·빈 이름 차단·생성 후 목록 및 입력칸 닫힘·960×640 넘침 없음도 확인했다.
+- `npm run check`: 오류 0개, 기존 경고 111개/29개 파일. `scripts/build-desktop.ps1` 성공, `desktop/build/bin/desktop-session-manager.exe` 갱신.
+- `verification/desktop-sidebar-add-group.png`를 시각 확인했다. 이전 테스트 캡처 재생성분은 원복하고 이번 캡처만 포함한다. 자체 검토와 `git diff --check`로 변경 범위를 확인한 뒤 이번 변경만 커밋한다. 기존 미추적 backup은 제외한다.
+- 적용: Desktop Session Manager를 다시 실행하면 반영된다. 최종 실행 파일의 WebView 창 조작은 하지 않았으며 브라우저 fixture 화면과 Windows 실행 파일 빌드로 검증했다.
