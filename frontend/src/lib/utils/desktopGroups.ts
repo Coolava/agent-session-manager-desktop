@@ -63,7 +63,9 @@ export function resolveGroups(tree: { byKey: Map<string, SessionNode> }, groups:
     const name = classification.combined.get(key) || sourceGroup(session)?.name || sourceProject(session)?.name
       || (isComputerWorkspace(session) ? '이 컴퓨터' : folder + (session.environment === 'ssh' ? ` · ${session.host}` : ''));
     const selectors = uniqueSelectors((origins.get(key) || []).map(origin => classification.combined.has(key) ? origin : { key: origin.key }));
-    automatic.push({ id: `path:${key}`, name, hint: `${session.host} · ${path || '작업 폴더 없음'}`,
+    const provenance = sourceGroup(session) ? `Claude · ${session.member[1]} · ${sourceGroup(session)!.id} · `
+      : sourceProject(session) ? `Codex · ${sourceProject(session)!.id} · ` : '';
+    automatic.push({ id: `path:${key}`, name, hint: `${provenance}${session.host} · ${path || '작업 폴더 없음'}`,
       source: { kind: 'automatic', name, selectors: selectors.length ? selectors : [{ key }] },
       keys: new Set([...classification.bySession].filter(([, groupKey]) => groupKey === key).map(([sessionKey]) => sessionKey)),
       providers: [], automatic: true });

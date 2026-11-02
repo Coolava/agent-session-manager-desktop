@@ -1,5 +1,11 @@
 import { test, expect } from '@playwright/test';
 
+const folders = '.group-row[data-group-kind="automatic"]:not([data-group-id*="claude-group"]):not([data-group-id*="codex-project"]):not([data-group-id*="combined-project"])';
+const claudeGroups = '.group-row[data-group-id*="claude-group"]';
+const codexProjects = '.group-row[data-group-id*="codex-project"]';
+const combinedProjects = '.group-row[data-group-id*="combined-project"]';
+const groupRow = (page, name) => page.locator('.group-row').filter({ has: page.getByText(name, { exact: true }) });
+
 async function setup(page, options = {}) {
   await page.addInitScript(options => {
     window.claudePending = options.claudePending;
@@ -8,21 +14,46 @@ async function setup(page, options = {}) {
       { key: 'codex-key', member: ['codex', 'local', 'codex-id'], provider: 'codex', id: 'codex-id', title: 'Session manager UI', cwd: 'D:/Projects/SessionManager', environment: 'local', host: 'local', lastActivity: 1793290000000 },
       ...(options.extraSessions ?? []),
     ];
-    const groups = options.groups ?? [];
+    const groups = options.persist ? JSON.parse(sessionStorage.getItem('desktop-test-groups') || JSON.stringify(options.groups ?? [])) : options.groups ?? [];
+    const persist = () => { if (options.persist) sessionStorage.setItem('desktop-test-groups', JSON.stringify(groups)); };
+    const sourceIdentity = source => JSON.stringify(source.kind === 'user' ? ['user', source.id] : ['automatic', source.selectors.map(s => JSON.stringify([s.key, s.root || ''])).sort()]);
     window.desktopSessions = sessions;
     window.desktopGroups = groups;
     window.extraActivities = Object.fromEntries(Object.entries(options.childStates ?? {}).map(([key, state]) => [key, { state, detail: 'Child response', observed_at: Date.now() / 1000 }]));
     window.desktopCalls = [];
     window.go = { main: { App: { Call: async request => {
       window.desktopCalls.push(request);
-      if (request.action === 'snapshot') return { sessions, groups, warnings: [], groupError: window.groupFailure ? 'Broken groups' : '' };
+      if (request.action === 'snapshot') {
+        const result = structuredClone({ sessions, groups, warnings: [], groupError: window.groupFailure ? 'Broken groups' : '' });
+        if (window.holdSnapshot) { window.holdSnapshot = false; await new Promise(resolve => { window.releaseSnapshot = resolve; }); }
+        return result;
+      }
       if (request.action === 'activities') {
         if (window.claudePending) return new Promise(() => {});
         return { 'claude-key': { state: 'completed', detail: 'Main response completed', observed_at: Date.now() / 1000 }, ...window.extraActivities };
       }
       if (request.action === 'codex-activities') return { 'codex-key': { state: window.codexState ?? 'working', detail: 'Codex turn state', observed_at: Date.now() / 1000 } };
       if (request.action === 'open') { await new Promise(resolve => setTimeout(resolve, window.openDelay ?? 300)); if (window.openFailure) throw new Error('Desktop link failed'); return { requested: true }; }
-      if (request.action === 'create-group') { const group = { id: 'group-1', name: request.name, members: [] }; groups.push(group); return group; }
+      if (['create-group', 'assign-session', 'assign-group'].includes(request.action) && window.saveFailure) throw new Error('Group save failed');
+      if (request.action === 'create-group') {
+        if (groups.some(g => g.name.toLowerCase() === request.name.trim().toLowerCase())) throw new Error('같은 이름의 그룹이 이미 있습니다.');
+        const group = { id: `group-${groups.length + 1}`, name: request.name.trim(), members: [], links: [] }; groups.push(group); persist(); return structuredClone(group);
+      }
+      if (request.action === 'assign-session') {
+        const session = sessions.find(s => s.key === request.key);
+        if (!session) throw new Error('Session disappeared');
+        for (const group of groups) {
+          group.members = group.members.filter(member => JSON.stringify(member) !== JSON.stringify(session.member));
+          if (request.targets.includes(group.id)) group.members.push(session.member);
+        }
+      }
+      if (request.action === 'assign-group') {
+        const identity = sourceIdentity(request.source);
+        for (const group of groups) {
+          group.links = (group.links || []).filter(source => sourceIdentity(source) !== identity);
+          if (request.targets.includes(group.id)) group.links.push(request.source);
+        }
+      }
       if (request.action === 'add-member') groups.find(g => g.id === request.id).members.push(sessions.find(s => s.key === request.key).member);
       if (request.action === 'remove-member') {
         const group = groups.find(g => g.id === request.id);
@@ -30,8 +61,12 @@ async function setup(page, options = {}) {
         group.members = group.members.filter(value => JSON.stringify(value) !== JSON.stringify(member));
       }
       if (request.action === 'rename-group') groups.find(g => g.id === request.id).name = request.name;
-      if (request.action === 'delete-group') groups.splice(groups.findIndex(g => g.id === request.id), 1);
-      return groups;
+      if (request.action === 'delete-group') {
+        groups.splice(groups.findIndex(g => g.id === request.id), 1);
+        for (const group of groups) group.links = (group.links || []).filter(source => source.kind !== 'user' || source.id !== request.id);
+      }
+      persist();
+      return structuredClone(groups);
     } } } };
   }, options);
   await page.goto('/desktop.html');
@@ -82,7 +117,7 @@ test('right click targets the latest row and opens details without opening an ap
   await page.locator('[data-session-key="claude-key"] .session-row').click({ button: 'right' });
   await expect(page.getByRole('menu')).toBeVisible();
   await expect(page.locator('.detail-card')).toHaveCount(0);
-  await page.locator('[data-session-key="codex-key"] .session-row').click({ button: 'right' });
+  await page.locator('[data-session-key="codex-key"] .session-row').click({ button: 'right', position: { x: 20, y: 10 } });
   await page.getByRole('button', { name: '↻ 새로고침' }).focus();
   await page.getByRole('menuitem', { name: '세션 상세' }).click();
   await expect(page.locator('.detail-card h2')).toHaveText('Session manager UI');
@@ -95,7 +130,7 @@ test('context menu supports keyboard entry and dismissal', async ({ page }) => {
   const row = page.locator('[data-session-key="claude-key"] .session-row');
   await row.focus();
   await page.keyboard.press('Shift+F10');
-  await expect(page.getByRole('menuitem')).toBeFocused();
+  await expect(page.getByRole('menuitem').first()).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('menu')).toHaveCount(0);
   await expect(row).toBeFocused();
@@ -110,7 +145,7 @@ test('context menu stays within the minimum window and closes on outside click o
   await page.setViewportSize({ width: 960, height: 640 });
   const row = page.locator('[data-session-key="codex-key"] .session-row');
   await row.evaluate(element => element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 958, clientY: 638 })));
-  await expect(page.getByRole('menuitem')).toBeFocused();
+  await expect(page.getByRole('menuitem').first()).toBeFocused();
   await expect.poll(async () => (await page.getByRole('menu').boundingBox()).x).toBeGreaterThan(700);
   const bounds = await page.getByRole('menu').boundingBox();
   expect(bounds.y).toBeGreaterThan(500);
@@ -152,12 +187,12 @@ test('groups retain memberships across snapshot refresh', async ({ page }) => {
   await setup(page);
   await page.getByRole('textbox', { name: '새 그룹 이름' }).fill('Release work');
   await page.getByRole('button', { name: '그룹 만들기' }).click();
-  await expect(page.getByRole('button', { name: '◇ Release work 0' })).toBeVisible();
+  await expect(groupRow(page, 'Release work')).toBeVisible();
   await showDetails(page, page.locator('.session-row').filter({ hasText: 'Workflow validation' }));
   await page.getByRole('button', { name: '그룹에 추가', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Release work ×', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '← 세션 목록' }).click();
-  await page.getByRole('button', { name: '◇ Release work 1' }).click();
+  await groupRow(page, 'Release work').click();
   await expect(page.locator('.session-row')).toHaveCount(1);
   await expect(page.locator('.session-row')).toContainText('Workflow validation');
   await page.getByRole('textbox', { name: '그룹 이름 변경' }).fill('Release ready');
@@ -234,10 +269,10 @@ test('Claude scratch workspaces share this computer and retain search, refresh a
     { key: 'scratch-two', member: ['claude', 'account', 'scratch-two'], provider: 'claude', id: 'scratch-two', title: 'Local research', cwd: 'F:\\Claude\\AppDataRoaming-Claude\\SCRATCH-WORKSPACES\\account\\org\\scratch-2026-10-30-two\\', environment: 'local', host: 'local', lastActivity: 1793290000000 },
   ];
   await setup(page, { extraSessions: scratchSessions });
-  const computer = page.locator('.path-row').filter({ hasText: '이 컴퓨터' });
+  const computer = page.locator(folders).filter({ hasText: '이 컴퓨터' });
   await expect(computer).toHaveCount(1);
-  await expect(page.locator('.path-row')).toHaveCount(3);
-  await expect(page.locator('.projects')).not.toContainText('scratch-2026');
+  await expect(page.locator(folders)).toHaveCount(3);
+  await expect(page.locator('.groups-list')).not.toContainText('scratch-2026');
   await computer.click();
   await expect(page.locator('.session-row')).toHaveCount(2);
   await expect(page.locator('.session-row')).toContainText(['Local planning', 'Local research']);
@@ -265,8 +300,8 @@ test('Codex projects combine assigned worktrees and same-root folders and retain
     { ...common, key: 'projectless', member: ['codex', 'local', 'projectless'], provider: 'codex', id: 'projectless', title: 'Computer conversation', cwd: 'F:/worktrees/temp/Calibration', projectCwd: 'D:/Projects/Calibration', projectless: true, codexProject },
     { ...common, key: 'empty', member: ['codex', 'local', 'empty'], provider: 'codex', id: 'empty', title: 'Empty working path', cwd: '', projectCwd: 'D:/Projects/Calibration', codexProject },
   ] });
-  await expect(page.locator('.path-row')).toHaveCount(4);
-  const rootProject = page.locator('.codex-project-row').filter({ hasText: 'Calibration workspace' });
+  await expect(page.locator(folders)).toHaveCount(4);
+  const rootProject = page.locator(codexProjects).filter({ hasText: 'Calibration workspace' });
   await expect(rootProject).toHaveCount(1);
   await rootProject.click();
   await expect(page.locator('.session-row')).toHaveCount(4);
@@ -292,21 +327,21 @@ test('Codex projects with identical names and roots stay distinct by ID across r
     { ...common, key: 'project-a', member: ['codex', 'local', 'project-a'], id: 'project-a', title: 'Task A', cwd: 'F:/worktrees/one', codexProject: { id: 'a', name: 'Shared' } },
     { ...common, key: 'project-b', member: ['codex', 'local', 'project-b'], id: 'project-b', title: 'Task B', cwd: 'F:/worktrees/two', codexProject: { id: 'b', name: 'Shared' } },
   ] });
-  await expect(page.locator('.codex-project-row')).toHaveCount(2);
-  await expect(page.locator('.path-row')).toHaveCount(2);
-  await page.locator('.codex-project-row').first().click();
+  await expect(page.locator(codexProjects)).toHaveCount(2);
+  await expect(page.locator(folders)).toHaveCount(2);
+  await page.locator(codexProjects).first().click();
   await expect(page.locator('.session-row')).toHaveCount(1);
   await expect(page.locator('.session-row')).toContainText('Task A');
   await page.evaluate(() => { window.desktopSessions.find(s => s.key === 'project-a').codexProject.name = 'Renamed'; });
   await page.getByRole('button', { name: '↻ 새로고침' }).click();
-  await expect(page.locator('.codex-project-row.active')).toHaveText('Renamed');
+  await expect(page.locator(codexProjects + '.active').locator('.group-name')).toHaveText('Renamed');
   await expect(page.locator('.session-row')).toContainText('Task A');
   await page.evaluate(() => { const session = window.desktopSessions.find(s => s.key === 'project-a'); delete session.codexProject; session.projectCwd = ''; });
   await page.getByRole('button', { name: '↻ 새로고침' }).click();
-  await expect(page.locator('.codex-project-row')).toHaveCount(1);
-  await expect(page.locator('.path-row').filter({ hasText: 'one' })).toHaveCount(1);
+  await expect(page.locator(codexProjects)).toHaveCount(1);
+  await expect(page.locator(folders).filter({ hasText: 'one' })).toHaveCount(1);
   await expect(page.locator('.session-row')).toHaveCount(4);
-  await page.locator('.codex-project-row').click();
+  await page.locator(codexProjects).click();
   await expect(page.locator('.session-row')).toHaveCount(1);
   await expect(page.locator('.session-row')).toContainText('Task B');
 });
@@ -322,9 +357,9 @@ test('explicit Claude groups stay distinct while unassigned folders join their u
     { ...common, key: 'codex-same-name', member: ['codex', 'local', 'codex-same-name'], id: 'codex-same-name', provider: 'codex', title: 'Codex project work', cwd: 'F:/worktrees/one', projectCwd: 'D:/Improve_Workflow', codexProject: { id: 'codex-project', name: 'Improve_Workflow' } },
     { ...common, key: 'folder-same-name', member: ['claude', 'account:org', 'folder-same-name'], id: 'folder-same-name', title: 'Ordinary folder work', cwd: 'D:/Improve_Workflow' },
   ] });
-  const sourceGroups = page.locator('.claude-group-row');
+  const sourceGroups = page.locator(claudeGroups);
   await expect(sourceGroups).toHaveCount(3);
-  await expect(page.locator('.path-row').filter({ hasText: 'test' })).toHaveCount(0);
+  await expect(page.locator(folders).filter({ hasText: 'test' })).toHaveCount(0);
   await sourceGroups.first().click();
   await expect(page.locator('.session-row')).toHaveCount(3);
   await expect(page.locator('.session-row')).toContainText(['sp-workflow migration', 'Workflow compression', 'Grouped scratch work']);
@@ -341,11 +376,11 @@ test('explicit Claude groups stay distinct while unassigned folders join their u
   expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([{ action: 'open', key: 'migration' }]);
   await page.getByRole('button', { name: '← 세션 목록' }).click();
   await page.getByRole('textbox', { name: '세션 검색' }).fill('');
-  await sourceGroups.nth(1).click();
+  await page.locator(claudeGroups + '[data-group-id*="other:org"]').click();
   await expect(page.locator('.session-row')).toHaveCount(1);
   await expect(page.locator('.session-row')).toContainText('Other account work');
-  await expect(page.locator('.path-row').filter({ hasText: 'Improve_Workflow' })).toHaveCount(0);
-  await page.locator('.codex-project-row').filter({ hasText: 'Improve_Workflow' }).click();
+  await expect(page.locator(folders).filter({ hasText: 'Improve_Workflow' })).toHaveCount(0);
+  await page.locator(codexProjects).filter({ hasText: 'Improve_Workflow' }).click();
   await expect(page.locator('.session-row')).toHaveCount(2);
   await expect(page.locator('.session-row')).toContainText(['Codex project work', 'Ordinary folder work']);
   await sourceGroups.first().click();
@@ -353,17 +388,17 @@ test('explicit Claude groups stay distinct while unassigned folders join their u
   await page.evaluate(() => { window.desktopSessions.forEach(session => { if (session.provider === 'claude') delete session.claudeGroup; }); });
   await page.getByRole('button', { name: '↻ 새로고침' }).click();
   await expect(sourceGroups).toHaveCount(0);
-  await expect(page.locator('.path-row').filter({ hasText: 'test' })).toHaveCount(1);
+  await expect(page.locator(folders).filter({ hasText: 'test' })).toHaveCount(1);
   await expect(page.locator('.session-row')).toHaveCount(9);
 });
 
 test('explicit child Claude groups override the parent classification while keeping tree context', async ({ page }) => {
   await setup(page, { extraSessions: childSessions.map((session, index) => index === 0 ? { ...session, claudeGroup: { id: 'cg-child', name: 'Child review' } } : session), initialRows: 2 });
-  await page.locator('.claude-group-row').filter({ hasText: 'Child review' }).click();
+  await page.locator(claudeGroups).filter({ hasText: 'Child review' }).click();
   await expect(page.locator('.session-row')).toHaveCount(2);
   await expect(page.locator('[data-session-key="child-aw"]')).toBeVisible();
   await expect(page.locator('[data-session-key="child-wf"]')).toHaveCount(0);
-  await page.locator('.path-row').filter({ hasText: 'Inspector' }).click();
+  await page.locator(folders).filter({ hasText: 'Inspector' }).click();
   await page.locator('[data-session-key="claude-key"] .tree-toggle').click();
   await expect(page.locator('[data-session-key="child-wf"]')).toBeVisible();
   await expect(page.locator('[data-session-key="child-aw"]')).toHaveCount(0);
@@ -377,10 +412,10 @@ test('ordinary scratch projects, Codex and SSH remain separate folders', async (
     { key: 'ssh-scratch', member: ['claude', 'account', 'ssh-scratch'], provider: 'claude', id: 'ssh-scratch', title: 'SSH scratch', cwd: scratchPath, environment: 'ssh', host: 'build-host', lastActivity: 1793300000000 },
   ];
   await setup(page, { extraSessions });
-  await expect(page.locator('.path-row')).toHaveCount(5);
-  await expect(page.locator('.path-row').filter({ hasText: '이 컴퓨터' })).toHaveCount(0);
+  await expect(page.locator(folders)).toHaveCount(5);
+  await expect(page.locator(folders).filter({ hasText: '이 컴퓨터' })).toHaveCount(0);
   for (const session of extraSessions) {
-    await page.locator('.path-row').filter({ hasText: session.environment === 'ssh' ? 'scratch-internal · build-host' : session.provider === 'codex' ? /scratch-internal$/ : 'scratch-project' }).click();
+    await groupRow(page, session.environment === 'ssh' ? 'scratch-internal · build-host' : session.provider === 'codex' ? 'scratch-internal' : 'scratch-project').click();
     await expect(page.locator('.session-row')).toHaveCount(1);
     await expect(page.locator('.session-row')).toContainText(session.title);
   }
@@ -393,9 +428,9 @@ test('explicit Codex projectless chats join Claude this computer without groupin
     { key: 'codex-empty', member: ['codex', 'local', 'codex-empty'], provider: 'codex', id: 'codex-empty', title: 'Codex empty path', cwd: '', environment: 'local', host: 'local', projectless: true, lastActivity: 1793300000000 },
     { key: 'codex-ordinary', member: ['codex', 'local', 'codex-ordinary'], provider: 'codex', id: 'codex-ordinary', title: 'Codex ordinary folder', cwd: 'C:/Users/test/Documents/Codex/2026-10-30/new-chat', environment: 'local', host: 'local', projectless: false, lastActivity: 1793300000000 },
   ] });
-  const computer = page.locator('.path-row').filter({ hasText: '이 컴퓨터' });
+  const computer = page.locator(folders).filter({ hasText: '이 컴퓨터' });
   await expect(computer).toHaveCount(1);
-  await expect(page.locator('.path-row')).toHaveCount(4);
+  await expect(page.locator(folders)).toHaveCount(4);
   await computer.click();
   await expect(page.locator('.session-row')).toHaveCount(3);
   await expect(page.locator('.session-row')).toContainText(['Claude local chat', 'Codex local chat', 'Codex empty path']);
@@ -410,10 +445,10 @@ test('explicit Codex projectless chats join Claude this computer without groupin
   await expect(page.getByRole('status')).toContainText('세션 열기를 요청했습니다');
   expect(await page.evaluate(() => window.desktopCalls.filter(c => c.action === 'open'))).toEqual([{ action: 'open', key: 'codex-projectless' }]);
   await page.getByRole('textbox', { name: '세션 검색' }).fill('');
-  await page.locator('.path-row').filter({ hasText: 'SessionManager' }).click();
+  await page.locator(folders).filter({ hasText: 'SessionManager' }).click();
   await expect(page.locator('.session-row')).toHaveCount(1);
   await expect(page.locator('.session-row')).toContainText('Session manager UI');
-  await page.locator('.path-row').filter({ hasText: 'new-chat' }).click();
+  await page.locator(folders).filter({ hasText: 'new-chat' }).click();
   await expect(page.locator('.session-row')).toHaveCount(1);
   await expect(page.locator('.session-row')).toContainText('Codex ordinary folder');
 });
@@ -423,7 +458,7 @@ test('families start collapsed, retain expansion and open the original child wit
   const parent = page.locator('[data-session-key="claude-key"]');
   await expect(parent.locator('.badge')).toHaveText('완료');
   await expect(parent.locator('.hierarchy-summary')).toHaveText('하위 2개 · 1개 작업 중');
-  await expect(page.locator('.path-row').filter({ hasText: /t3-aw|t3-wf/ })).toHaveCount(0);
+  await expect(page.locator(folders).filter({ hasText: /t3-aw|t3-wf/ })).toHaveCount(0);
   await parent.locator('.tree-toggle').click();
   await expect(page.locator('.detail-card')).toHaveCount(0);
   await expect(page.locator('.session-row')).toHaveCount(4);
@@ -438,7 +473,7 @@ test('families start collapsed, retain expansion and open the original child wit
   await page.locator('.parent-link button').click();
   await expect(page.locator('.detail-card h2')).toHaveText('Workflow validation');
   await page.getByRole('button', { name: '← 세션 목록' }).click();
-  await page.getByRole('button', { name: '▱ Inspector · build-host', exact: true }).click();
+  await groupRow(page, 'Inspector · build-host').click();
   await expect(page.locator('.session-row')).toHaveCount(3);
   await page.evaluate(() => { window.extraActivities['child-aw'].state = 'completed'; });
   await page.getByRole('button', { name: '↻ 새로고침' }).click();
@@ -510,7 +545,7 @@ test('a group containing only a child shows its ancestors without unrelated sibl
   await page.locator('[data-session-key="claude-key"] .tree-toggle').click();
   await showDetails(page, page.locator('[data-session-key="child-aw"] .session-row'));
   await page.getByRole('button', { name: '그룹에 추가', exact: true }).click();
-  await page.getByRole('button', { name: '◇ Child work 1', exact: true }).click();
+  await groupRow(page, 'Child work').click();
   await expect(page.locator('.session-row')).toHaveCount(2);
   await expect(page.locator('[data-session-key="claude-key"]')).toBeVisible();
   await expect(page.locator('[data-session-key="child-aw"]')).toBeVisible();
@@ -536,7 +571,7 @@ test('missing parents remain accessible and independent sessions retain a shared
   await showDetails(page, page.locator('[data-session-key="orphan"] .session-row'));
   await expect(page.locator('.parent-link')).toHaveText('부모 대화 확인 불가');
   await page.getByRole('button', { name: '← 세션 목록' }).click();
-  await page.getByRole('button', { name: '▱ t3-aw', exact: true }).click();
+  await groupRow(page, 't3-aw').click();
   await expect(page.locator('.session-row')).toHaveCount(1);
   await expect(page.locator('.session-row')).toContainText('Independent project chat');
 });
@@ -549,13 +584,13 @@ test('same-root Claude and inferred Codex sessions automatically share one folde
     { ...common, key: 'alt-codex', member: ['codex', 'local', 'alt-codex'], provider: 'codex', id: 'alt-codex', title: 'Codex ALT task', cwd: 'F:/worktrees/ALT', projectCwd: 'd:/Projects/ALT Test/', codexProject: { id: 'alt', name: 'ALT Test' }, codexAssignment: null },
     { ...common, key: 'alt-other', member: ['claude', 'account', 'alt-other'], provider: 'claude', id: 'alt-other', title: 'Different root task', cwd: 'E:/Projects/ALT Test' },
   ] });
-  const project = page.locator('.path-row').filter({ hasText: 'ALT Test' });
+  const project = page.locator(folders).filter({ hasText: 'ALT Test' });
   await expect(project).toHaveCount(2);
   await project.filter({ has: page.locator('span', { hasText: 'ALT Test' }) }).first().click();
   await expect(page.locator('.session-row')).toHaveCount(2);
   await expect(page.locator('.session-row')).toContainText(['Claude ALT task', 'Codex ALT task']);
   await page.getByRole('button', { name: '↻ 새로고침' }).click();
-  await expect(page.locator('.path-row.active')).toContainText('ALT Test');
+  await expect(page.locator(folders + '.active')).toContainText('ALT Test');
   await showDetails(page, page.locator('[data-session-key="alt-codex"] .session-row'));
   await expect(page.locator('dd').first()).toHaveText('F:/worktrees/ALT');
   await page.getByRole('button', { name: /Codex Desktop에서 열기/ }).click();
@@ -576,23 +611,23 @@ test('same-root explicit groups and unassigned sessions remain separate across r
     { ...common, key: 'shared-inferred', id: 'shared-inferred', member: ['codex', 'local', 'shared-inferred'], provider: 'codex', title: 'Unassigned Codex', codexProject: { id: 'inferred', name: 'SharedRoot' }, codexAssignment: null },
   ] });
   for (const name of ['Group A', 'Group B']) {
-    await page.locator('.claude-group-row').filter({ hasText: name }).click();
+    await page.locator(claudeGroups).filter({ hasText: name }).click();
     await expect(page.locator('.session-row')).toHaveCount(1);
     await expect(page.locator('.session-row')).toContainText(name === 'Group A' ? 'Assigned A' : 'Assigned B');
   }
-  await page.locator('.path-row').filter({ hasText: 'SharedRoot' }).click();
+  await page.locator(folders).filter({ hasText: 'SharedRoot' }).click();
   await expect(page.locator('.session-row')).toHaveCount(2);
   await expect(page.locator('.session-row')).toContainText(['Unassigned Claude', 'Unassigned Codex']);
   await page.screenshot({ path: '../verification/desktop-unified-project-conflicts.png' });
   await page.evaluate(() => { window.desktopSessions.find(s => s.key === 'shared-a').claudeGroup.name = 'Renamed A'; window.desktopSessions.reverse(); });
   await page.getByRole('button', { name: '↻ 새로고침' }).click();
   await expect(page.locator('.session-row')).toHaveCount(2);
-  await expect(page.locator('.path-row.active')).toContainText('SharedRoot');
+  await expect(page.locator(folders + '.active')).toContainText('SharedRoot');
   await page.evaluate(() => { delete window.desktopSessions.find(s => s.key === 'shared-b').claudeGroup; });
   await page.getByRole('button', { name: '↻ 새로고침' }).click();
-  await expect(page.locator('.path-row').filter({ hasText: 'SharedRoot' })).toHaveCount(0);
+  await expect(page.locator(folders).filter({ hasText: 'SharedRoot' })).toHaveCount(0);
   await expect(page.locator('.session-row')).toHaveCount(6);
-  await page.locator('.claude-group-row').filter({ hasText: 'Renamed A' }).click();
+  await page.locator(claudeGroups).filter({ hasText: 'Renamed A' }).click();
   await expect(page.locator('.session-row')).toHaveCount(4);
   await page.getByRole('textbox', { name: '세션 검색' }).fill('Renamed Unassigned');
   await expect(page.locator('.session-row')).toHaveCount(2);
@@ -613,20 +648,20 @@ test('manual memberships override automatic projects until the last group is rem
     { id: 'manual-a', name: 'Manual A', members: [member] },
     { id: 'manual-b', name: 'Manual B', members: [member] },
   ] });
-  const automatic = page.locator('.combined-project-row').filter({ hasText: 'Inspector' });
+  const automatic = page.locator(combinedProjects).filter({ hasText: 'Inspector' });
   await automatic.click();
   await expect(page.locator('.session-row')).toHaveCount(2);
   await expect(page.locator('[data-session-key="inspector-loose"]')).toHaveCount(0);
-  await expect(page.locator('.claude-group-row, .codex-project-row')).toHaveCount(0);
+  await expect(page.locator(claudeGroups + ', ' + codexProjects)).toHaveCount(0);
   await page.screenshot({ path: '../verification/desktop-manual-priority.png' });
-  await page.getByRole('button', { name: '◇ Manual A 1', exact: true }).click();
+  await groupRow(page, 'Manual A').click();
   await showDetails(page, page.locator('.session-row'));
   await expect(page.locator('.detail-card')).not.toContainText('통합 프로젝트');
   await page.getByRole('button', { name: 'Manual A ×', exact: true }).click();
   await page.getByRole('button', { name: '← 세션 목록' }).click();
   await automatic.click();
   await expect(page.locator('.session-row')).toHaveCount(2);
-  await page.getByRole('button', { name: '◇ Manual B 1', exact: true }).click();
+  await groupRow(page, 'Manual B').click();
   await showDetails(page, page.locator('.session-row'));
   await page.getByRole('button', { name: 'Manual B ×', exact: true }).click();
   await page.getByRole('button', { name: '← 세션 목록' }).click();
@@ -638,7 +673,7 @@ test('manual memberships override automatic projects until the last group is rem
   await page.getByRole('button', { name: '← 세션 목록' }).click();
   await automatic.click();
   await expect(page.locator('.session-row')).toHaveCount(2);
-  await page.getByRole('button', { name: '◇ Manual A 1', exact: true }).click();
+  await groupRow(page, 'Manual A').click();
   await page.getByRole('button', { name: '그룹 삭제', exact: true }).click();
   await page.getByRole('button', { name: '삭제 확인', exact: true }).click();
   await automatic.click();
@@ -653,19 +688,19 @@ test('automatic projects merge matching providers within one root and keep other
   await setup(page, { extraSessions: [...matchingProjectSessions,
     { ...matchingProjectSessions[0], key: 'inspector-other', id: 'inspector-other', member: ['claude', 'account', 'inspector-other'], cwd: 'F:/Other', title: 'Other path' },
   ] });
-  const automatic = page.locator('.combined-project-row').filter({ hasText: 'Inspector' });
+  const automatic = page.locator(combinedProjects).filter({ hasText: 'Inspector' });
   await automatic.click();
   await expect(page.locator('.session-row')).toHaveCount(3);
   await expect(page.locator('[data-session-key="inspector-other"]')).toHaveCount(0);
   await page.getByRole('button', { name: '↻ 새로고침' }).click();
   await expect(automatic).toHaveClass(/active/);
-  await page.locator('.claude-group-row').filter({ hasText: 'Inspector' }).click();
+  await page.locator(claudeGroups).filter({ hasText: 'Inspector' }).click();
   await expect(page.locator('.session-row')).toHaveCount(1);
   await expect(page.locator('.session-row')).toContainText('Other path');
   await page.evaluate(() => { window.desktopSessions.find(s => s.key === 'inspector-codex').codexProject.name = 'Different project'; });
   await page.getByRole('button', { name: '↻ 새로고침' }).click();
   await expect(automatic).toHaveCount(0);
-  await page.getByRole('button', { name: '▱ Inspector', exact: true }).click();
+  await page.locator(folders).filter({ has: page.getByText('Inspector', { exact: true }) }).click();
   await expect(page.locator('.session-row')).toHaveCount(1);
   await expect(page.locator('.session-row')).toContainText('Loose inspector');
 });
@@ -674,17 +709,231 @@ test('a manually grouped parent is context only in its unassigned childs automat
   await setup(page, { extraSessions: childSessions, initialRows: 2, groups: [
     { id: 'parent-manual', name: 'Parent work', members: [['claude', 'account', 'claude-id']] },
   ] });
-  await page.locator('.path-row').filter({ hasText: 't3-aw' }).click();
+  await page.locator(folders).filter({ hasText: 't3-aw' }).click();
   await expect(page.locator('.session-row')).toHaveCount(2);
   await expect(page.locator('[data-session-key="claude-key"]')).toHaveClass(/context-entry/);
   await expect(page.locator('[data-session-key="claude-key"]')).toContainText('문맥 표시');
   await expect(page.locator('[data-session-key="child-aw"]')).not.toHaveClass(/context-entry/);
-  await page.getByRole('button', { name: '◇ Parent work 1', exact: true }).click();
+  await groupRow(page, 'Parent work').click();
   await expect(page.locator('.session-row')).toHaveCount(1);
   await page.evaluate(() => { window.groupFailure = true; });
   await page.getByRole('button', { name: '↻ 새로고침' }).click();
-  await expect(page.locator('.path-row, .claude-group-row, .codex-project-row, .combined-project-row')).toHaveCount(0);
+  await expect(page.locator('.group-row[data-group-kind="automatic"]')).toHaveCount(0);
   await expect(page.locator('aside .nav-row').filter({ hasText: 'Parent work' })).toContainText('1');
   await page.locator('aside .nav-row').filter({ hasText: '전체 세션' }).click();
   await expect(page.locator('.session-row')).toHaveCount(2);
+});
+
+async function assignMenu(page, row) {
+  await row.click({ button: 'right', position: { x: 20, y: 10 } });
+  await page.getByRole('menuitem', { name: '그룹 할당…' }).click();
+  await expect(page.getByRole('dialog', { name: '그룹 할당' })).toBeVisible();
+  return page.getByRole('dialog', { name: '그룹 할당' });
+}
+
+test('Groups is one sorted list with actual single and half mixed Agent icons', async ({ page }) => {
+  await setup(page, { groups: [{ id: 'empty', name: 'Empty group', members: [] }], extraSessions: [
+    { key: 'mixed', member: ['codex', 'local', 'mixed'], provider: 'codex', id: 'mixed', title: 'Shared review', cwd: 'D:/Projects/Inspector', environment: 'ssh', host: 'build-host', lastActivity: 1793300000000 },
+  ] });
+  await expect(page.locator('aside .sidebar-label')).toHaveText(['WORKSPACE', 'Groups 3']);
+  const names = await page.locator('.group-name').allTextContents();
+  expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b, 'ko')));
+  const shared = groupRow(page, 'Inspector · build-host');
+  await expect(shared.locator('.group-count')).toHaveText('2');
+  await expect(shared.getByRole('img', { name: 'Claude · Codex' })).toBeVisible();
+  await expect(shared.locator('.claude-half')).toHaveCSS('clip-path', 'inset(0px 50% 0px 0px)');
+  await expect(shared.locator('.codex-half')).toHaveCSS('clip-path', 'inset(0px 0px 0px 50%)');
+  await expect(groupRow(page, 'SessionManager').getByRole('img', { name: 'codex', exact: true })).toBeVisible();
+  await expect(groupRow(page, 'Empty group').locator('.group-count')).toHaveText('0');
+  await page.screenshot({ path: '../verification/desktop-groups-unified.png' });
+});
+
+test('session assignment creates a group in the dialog, persists after reload and unassigns', async ({ page }) => {
+  await setup(page, { persist: true });
+  let dialog = await assignMenu(page, page.locator('[data-session-key="claude-key"] .session-row'));
+  await expect(dialog).toContainText('아직 사용자 그룹이 없습니다');
+  await dialog.getByRole('textbox', { name: '새 그룹 이름' }).fill('Release work');
+  await dialog.getByRole('button', { name: '그룹 만들기' }).click();
+  await expect(dialog.getByRole('checkbox', { name: 'Release work' })).toBeChecked();
+  await dialog.getByRole('button', { name: '할당 적용' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(groupRow(page, 'Release work').locator('.group-count')).toHaveText('1');
+  await expect(groupRow(page, 'Release work').getByRole('img', { name: 'claude', exact: true })).toBeVisible();
+  await expect(page.locator('[data-session-key="claude-key"] .session-row')).toBeFocused();
+  await page.reload();
+  await expect(groupRow(page, 'Release work').locator('.group-count')).toHaveText('1');
+  await expect(groupRow(page, 'Inspector · build-host')).toHaveCount(0);
+  dialog = await assignMenu(page, page.locator('[data-session-key="claude-key"] .session-row'));
+  await expect(dialog.getByRole('checkbox', { name: 'Release work' })).toBeChecked();
+  await dialog.getByRole('checkbox', { name: 'Release work' }).uncheck();
+  await dialog.getByRole('button', { name: '할당 적용' }).click();
+  await expect(groupRow(page, 'Release work').locator('.group-count')).toHaveText('0');
+  await expect(groupRow(page, 'Inspector · build-host')).toBeVisible();
+  expect(await page.evaluate(() => window.desktopCalls.filter(call => call.action === 'open'))).toEqual([]);
+});
+
+test('automatic group links persist, include new sessions, honor direct assignment and can be unlinked after hiding', async ({ page }) => {
+  await setup(page, { persist: true, groups: [{ id: 'linked', name: 'My project', members: [] }, { id: 'direct', name: 'Direct work', members: [] }] });
+  let dialog = await assignMenu(page, groupRow(page, 'SessionManager'));
+  await expect(dialog).toContainText('이후');
+  await dialog.getByRole('checkbox', { name: 'My project' }).check();
+  await dialog.getByRole('button', { name: '할당 적용' }).click();
+  await expect(groupRow(page, 'SessionManager')).toHaveCount(0);
+  await page.reload();
+  await expect(groupRow(page, 'My project').locator('.group-count')).toHaveText('1');
+  await page.evaluate(() => window.desktopSessions.push({ key: 'new', member: ['claude', 'account', 'new'], provider: 'claude', id: 'new', title: 'Future session', cwd: 'D:/Projects/SessionManager', environment: 'local', host: 'local', lastActivity: 1793300000000 }));
+  await page.getByRole('button', { name: '↻ 새로고침' }).click();
+  await expect(groupRow(page, 'My project').locator('.group-count')).toHaveText('2');
+  await expect(groupRow(page, 'My project').getByRole('img', { name: 'Claude · Codex' })).toBeVisible();
+  await groupRow(page, 'My project').click();
+  await expect(page.locator('.session-row')).toHaveCount(2);
+  dialog = await assignMenu(page, page.locator('[data-session-key="new"] .session-row'));
+  await expect(dialog.locator('.inherited-groups')).toContainText('My project');
+  await expect(dialog.getByRole('checkbox', { name: 'My project' })).not.toBeChecked();
+  await dialog.getByRole('checkbox', { name: 'Direct work' }).check();
+  await dialog.getByRole('button', { name: '할당 적용' }).click();
+  await expect(groupRow(page, 'My project').locator('.group-count')).toHaveText('1');
+  await expect(groupRow(page, 'Direct work').locator('.group-count')).toHaveText('1');
+  await expect(groupRow(page, 'My project').getByRole('img', { name: 'codex', exact: true })).toBeVisible();
+  await page.getByRole('region', { name: '연결된 그룹' }).getByRole('button', { name: /SessionManager/ }).click();
+  dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('checkbox', { name: 'My project' })).toBeChecked();
+  await dialog.getByRole('checkbox', { name: 'My project' }).uncheck();
+  await dialog.getByRole('button', { name: '할당 적용' }).click();
+  await expect(groupRow(page, 'SessionManager')).toBeVisible();
+  await expect(groupRow(page, 'My project').locator('.group-count')).toHaveText('0');
+  expect(await page.evaluate(() => window.desktopGroups.find(group => group.id === 'linked').links)).toEqual([]);
+});
+
+test('user group links aggregate members, block cycles and clean references on deletion', async ({ page }) => {
+  await setup(page, { groups: [
+    { id: 'child', name: 'Child', members: [['claude', 'account', 'claude-id']] },
+    { id: 'parent', name: 'Parent', members: [['codex', 'local', 'codex-id']] },
+  ] });
+  let dialog = await assignMenu(page, groupRow(page, 'Child'));
+  await expect(dialog.getByRole('checkbox', { name: 'Child 연결 불가' })).toBeDisabled();
+  await dialog.getByRole('checkbox', { name: 'Parent', exact: true }).check();
+  await dialog.getByRole('button', { name: '할당 적용' }).click();
+  await expect(groupRow(page, 'Parent').locator('.group-count')).toHaveText('2');
+  dialog = await assignMenu(page, groupRow(page, 'Parent'));
+  await expect(dialog.getByRole('checkbox', { name: 'Child 연결 불가' })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(groupRow(page, 'Parent')).toBeFocused();
+  await groupRow(page, 'Child').click();
+  await page.getByRole('button', { name: '그룹 삭제', exact: true }).click();
+  await page.getByRole('button', { name: '삭제 확인' }).click();
+  await expect(groupRow(page, 'Parent').locator('.group-count')).toHaveText('1');
+  await expect(groupRow(page, 'Inspector · build-host')).toBeVisible();
+  expect(await page.evaluate(() => window.desktopGroups[0].links)).toEqual([]);
+});
+
+test('failed assignment retains a created group and dialog choices for retry', async ({ page }) => {
+  await setup(page);
+  const dialog = await assignMenu(page, page.locator('[data-session-key="claude-key"] .session-row'));
+  await dialog.getByRole('textbox', { name: '새 그룹 이름' }).fill('Created first');
+  await dialog.getByRole('button', { name: '그룹 만들기' }).click();
+  await expect(dialog.getByRole('checkbox', { name: 'Created first' })).toBeChecked();
+  await dialog.getByRole('textbox', { name: '새 그룹 이름' }).fill('Created first');
+  await dialog.getByRole('button', { name: '그룹 만들기' }).click();
+  await expect(dialog.getByRole('alert')).toContainText('같은 이름');
+  await page.evaluate(() => { window.saveFailure = true; });
+  await dialog.getByRole('button', { name: '할당 적용' }).click();
+  await expect(dialog.getByRole('alert')).toContainText('Group save failed');
+  await expect(dialog.getByRole('checkbox', { name: 'Created first' })).toBeChecked();
+  expect(await page.evaluate(() => window.desktopGroups.length)).toBe(1);
+  await page.evaluate(() => { window.saveFailure = false; });
+  await dialog.getByRole('button', { name: '할당 적용' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(groupRow(page, 'Created first').locator('.group-count')).toHaveText('1');
+});
+
+test('a vanished session or deleted selected group prevents silent assignment', async ({ page }) => {
+  await page.clock.install();
+  await setup(page, { groups: [{ id: 'a', name: 'A', members: [['claude', 'account', 'claude-id']] }, { id: 'b', name: 'B', members: [] }] });
+  let dialog = await assignMenu(page, page.locator('[data-session-key="claude-key"] .session-row'));
+  await page.evaluate(() => window.desktopGroups.splice(0, 1));
+  await page.clock.fastForward(5000);
+  await expect(dialog.getByRole('alert')).toContainText('선택한 그룹이 삭제');
+  await expect(dialog.getByRole('button', { name: '할당 적용' })).toBeDisabled();
+  await dialog.getByRole('button', { name: '사라진 그룹 선택 해제' }).click();
+  await dialog.getByRole('checkbox', { name: 'B', exact: true }).check();
+  await dialog.getByRole('button', { name: '할당 적용' }).click();
+  await expect(groupRow(page, 'B').locator('.group-count')).toHaveText('1');
+  dialog = await assignMenu(page, page.locator('[data-session-key="claude-key"] .session-row'));
+  await page.evaluate(() => window.desktopSessions.splice(0, 1));
+  await page.clock.fastForward(5000);
+  await expect(dialog.getByRole('alert')).toContainText('해당 세션이 사라졌습니다');
+  await expect(dialog.getByRole('button', { name: '할당 적용' })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+});
+
+test('dialog supports keyboard focus trapping, multiple choices and long names in the minimum window', async ({ page }) => {
+  await setup(page, { groups: [
+    { id: 'a', name: 'Design review', members: [] }, { id: 'b', name: 'Release readiness', members: [] },
+    { id: 'long', name: '긴 그룹 이름 '.repeat(10), members: [] },
+  ] });
+  await page.setViewportSize({ width: 960, height: 640 });
+  const row = page.locator('[data-session-key="claude-key"] .session-row');
+  await row.focus();
+  await page.keyboard.press('Shift+F10');
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByRole('menuitem', { name: '그룹 할당…' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('checkbox', { name: 'Design review' })).toBeFocused();
+  await dialog.getByRole('checkbox', { name: 'Design review' }).check();
+  await dialog.getByRole('checkbox', { name: 'Release readiness' }).check();
+  await dialog.getByRole('button', { name: '할당 적용' }).focus();
+  await page.keyboard.press('Tab');
+  await expect(dialog.getByRole('button', { name: '그룹 할당 닫기' })).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(dialog.getByRole('button', { name: '할당 적용' })).toBeFocused();
+  expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const box = await dialog.boundingBox();
+  expect(box.x).toBeGreaterThanOrEqual(24);
+  expect(box.y).toBeGreaterThanOrEqual(24);
+  expect(box.y + box.height).toBeLessThanOrEqual(616);
+  const heading = await dialog.getByRole('heading', { name: '그룹 할당' }).boundingBox();
+  const close = await dialog.getByRole('button', { name: '그룹 할당 닫기' }).boundingBox();
+  expect(Math.abs(heading.y + heading.height / 2 - close.y - close.height / 2)).toBeLessThan(2);
+  expect(close.x).toBeGreaterThan(heading.x + heading.width);
+  await page.screenshot({ path: '../verification/desktop-group-assignment.png' });
+  await dialog.getByRole('button', { name: '할당 적용' }).click();
+  await expect(groupRow(page, 'Design review').locator('.group-count')).toHaveText('1');
+  await expect(groupRow(page, 'Release readiness').locator('.group-count')).toHaveText('1');
+});
+
+test('an older in-flight snapshot cannot overwrite a completed assignment', async ({ page }) => {
+  await page.clock.install();
+  await setup(page, { groups: [{ id: 'a', name: 'A', members: [] }] });
+  const dialog = await assignMenu(page, page.locator('[data-session-key="claude-key"] .session-row'));
+  await dialog.getByRole('checkbox', { name: 'A', exact: true }).check();
+  await page.evaluate(() => { window.holdSnapshot = true; });
+  await page.clock.fastForward(5000);
+  await expect.poll(() => page.evaluate(() => typeof window.releaseSnapshot)).toBe('function');
+  await dialog.getByRole('button', { name: '할당 적용' }).click();
+  await expect(groupRow(page, 'A').locator('.group-count')).toHaveText('1');
+  await page.evaluate(() => window.releaseSnapshot());
+  await expect(page.getByRole('button', { name: '↻ 새로고침' })).toBeEnabled();
+  await expect(groupRow(page, 'A').locator('.group-count')).toHaveText('1');
+});
+
+test('a group read failure or vanished user group disables the open assignment dialog', async ({ page }) => {
+  await page.clock.install();
+  await setup(page, { groups: [{ id: 'a', name: 'A', members: [] }] });
+  let dialog = await assignMenu(page, groupRow(page, 'A'));
+  await page.evaluate(() => { window.groupFailure = true; });
+  await page.clock.fastForward(5000);
+  await expect(dialog.getByRole('alert')).toContainText('그룹 파일을 읽지 못했습니다');
+  await expect(dialog.getByRole('button', { name: '할당 적용' })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => { window.groupFailure = false; });
+  await page.clock.fastForward(5000);
+  dialog = await assignMenu(page, groupRow(page, 'A'));
+  await page.evaluate(() => window.desktopGroups.splice(0, 1));
+  await page.clock.fastForward(5000);
+  await expect(dialog.getByRole('alert')).toContainText('해당 사용자 그룹이 삭제되었습니다');
+  await expect(dialog.getByRole('button', { name: '할당 적용' })).toBeDisabled();
+  await expect(dialog.getByRole('textbox', { name: '새 그룹 이름' })).toBeDisabled();
 });
