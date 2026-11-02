@@ -104,6 +104,26 @@ async function setupWithClock(page) {
   await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
 }
 
+test('settings stays visible below a separately scrolling long group list', async ({ page }) => {
+  await setup(page, { groups: Array.from({ length: 40 }, (_, index) => ({ id: `group-${index}`, name: `Group ${String(index).padStart(2, '0')}`, members: [] })) });
+  const settings = page.getByRole('button', { name: '설정', exact: true });
+  for (const viewport of [{ width: 1380, height: 880 }, { width: 960, height: 640 }]) {
+    await page.setViewportSize(viewport);
+    await expect(settings).toBeInViewport();
+    const position = await settings.boundingBox();
+    await groupRow(page, 'Group 39').scrollIntoViewIfNeeded();
+    await expect(settings).toBeInViewport();
+    expect(await settings.boundingBox()).toEqual(position);
+    await groupRow(page, 'Group 39').click();
+    await expect(page.getByRole('heading', { name: 'Group 39', exact: true })).toBeVisible();
+    await settings.click();
+    await expect(page.getByRole('heading', { name: '설정', exact: true })).toBeVisible();
+    await page.screenshot({ path: `test-results/desktop-settings-long-groups-${viewport.width}.png` });
+    await groupRow(page, 'Group 00').scrollIntoViewIfNeeded();
+    expect(await settings.boundingBox()).toEqual(position);
+  }
+});
+
 test('refresh settings live in their own screen and persist across reloads', async ({ page }) => {
   await setup(page);
   const refreshButton = page.getByRole('button', { name: '↻ 새로고침', exact: true });
@@ -882,7 +902,7 @@ test('sidebar hides counts and adds groups from the My Groups heading while reta
     { key: 'mixed', member: ['codex', 'local', 'mixed'], provider: 'codex', id: 'mixed', title: 'Shared review', cwd: 'D:/Projects/Inspector', environment: 'ssh', host: 'build-host', lastActivity: 1793300000000 },
   ] });
   await expect(page.locator('aside .sidebar-label')).toHaveText(['WORKSPACE', 'My Groups ＋', 'Groups']);
-  await expect(page.locator('aside > .nav-row > span:last-child')).toHaveText(['전체 세션', 'Claude Desktop', 'Codex Desktop', '설정']);
+  await expect(page.locator('.sidebar-content > .nav-row > span:last-child')).toHaveText(['전체 세션', 'Claude Desktop', 'Codex Desktop']);
   await expect(page.locator('aside .group-count, aside .nav-row > small')).toHaveCount(0);
   const manual = page.getByRole('region', { name: 'My Groups', exact: true });
   const automatic = page.getByRole('region', { name: 'Groups', exact: true });

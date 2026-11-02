@@ -38,3 +38,14 @@
 - 브라우저 검증은 모의 bridge를 사용했다. 실제 Claude/Codex 앱에 대화를 열거나 실행 중인 Desktop Manager를 종료하지 않았다.
 - 기존 미추적 `verification/desktop-replacement-backup/`은 변경/커밋하지 않는다.
 - 남은 구현 작업 없음. 빌드된 앱을 재실행하면 적용된다.
+
+## 후속 수정 — 그룹이 많아도 설정 버튼 고정 (2026-11-02)
+
+- 요청: 설정 버튼이 그룹과 같은 스크롤 영역에 있어 그룹이 많으면 스크롤해야 찾을 수 있다.
+- 위험도: Low. 기존 화면의 스크롤 영역만 분리하는 국소적 배치 수정이다.
+- 범위/진행: 많은 그룹에서 재현 → 목록 스크롤과 고정 설정 버튼 분리 → 회귀·타입 검사·빌드·화면 확인 → 이번 수정만 별도 커밋.
+- `DesktopApp.svelte`: WORKSPACE/My Groups/Groups를 `.sidebar-content` 안에서만 스크롤한다. 설정 버튼과 연결 안내는 해당 영역 밖에 두고 축소되지 않도록 하여 하단에 고정한다. 설정·갱신 로직은 유지한다.
+- 새 Playwright 회귀 검증에 그룹 40개를 사용했다. 수정 전 설정 버튼이 viewport 밖이라는 assertion 실패로 재현했다. 수정 후 1380×880과 960×640 모두에서 최초 표시, 목록 위/아래 스크롤 시 버튼 위치 유지, 마지막 그룹 선택과 설정 화면 열기를 검증했다.
+- 전체 Desktop Playwright: 55개 통과 (44.9초). `npm run check`: 오류 0개, 기존 경고 111개/29개 파일. `scripts/build-desktop.ps1`: 통과, Windows 실행 파일 갱신. `git diff --check`: 통과.
+- `verification/desktop-settings-long-groups-1380.png`, `desktop-settings-long-groups-960.png`에 검증 화면을 보관한다. 최소 크기 캡처를 직접 확인했다. 다른 회귀 테스트가 생성한 기존 캡처 변경은 되돌려 변경 범위를 제한했다.
+- 자체 검토: 제품 변경은 스크롤 wrapper와 CSS에 한정했다. 새 의존성·backend·갱신 동작 변경 없음. 실제 실행 중인 앱은 종료하지 않았으며 재실행하면 적용된다.
