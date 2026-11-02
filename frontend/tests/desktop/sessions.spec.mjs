@@ -272,7 +272,7 @@ test('Claude scratch workspaces share this computer and retain search, refresh a
   const computer = page.locator(folders).filter({ hasText: '이 컴퓨터' });
   await expect(computer).toHaveCount(1);
   await expect(page.locator(folders)).toHaveCount(3);
-  await expect(page.locator('.groups-list')).not.toContainText('scratch-2026');
+  await expect(page.getByRole('region', { name: 'Groups', exact: true }).locator('.groups-list')).not.toContainText('scratch-2026');
   await computer.click();
   await expect(page.locator('.session-row')).toHaveCount(2);
   await expect(page.locator('.session-row')).toContainText(['Local planning', 'Local research']);
@@ -731,13 +731,19 @@ async function assignMenu(page, row) {
   return page.getByRole('dialog', { name: '그룹 할당' });
 }
 
-test('Groups is one sorted list with actual single and half mixed Agent icons', async ({ page }) => {
-  await setup(page, { groups: [{ id: 'empty', name: 'Empty group', members: [] }], extraSessions: [
+test('My Groups sits below Workspace and separates sorted user and automatic groups with actual Agent icons', async ({ page }) => {
+  await setup(page, { groups: [{ id: 'zebra', name: 'Zebra group', members: [] }, { id: 'empty', name: 'Empty group', members: [] }], extraSessions: [
     { key: 'mixed', member: ['codex', 'local', 'mixed'], provider: 'codex', id: 'mixed', title: 'Shared review', cwd: 'D:/Projects/Inspector', environment: 'ssh', host: 'build-host', lastActivity: 1793300000000 },
   ] });
-  await expect(page.locator('aside .sidebar-label')).toHaveText(['WORKSPACE', 'Groups 3']);
-  const names = await page.locator('.group-name').allTextContents();
-  expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b, 'ko')));
+  await expect(page.locator('aside .sidebar-label')).toHaveText(['WORKSPACE', 'My Groups 2', 'Groups 2']);
+  const manual = page.getByRole('region', { name: 'My Groups', exact: true });
+  const automatic = page.getByRole('region', { name: 'Groups', exact: true });
+  await expect(manual.locator('.group-name')).toHaveText(['Empty group', 'Zebra group']);
+  await expect(automatic.locator('.group-name')).toHaveText(['Inspector · build-host', 'SessionManager']);
+  await expect(manual.locator('[data-group-kind="automatic"]')).toHaveCount(0);
+  await expect(automatic.locator('[data-group-kind="user"]')).toHaveCount(0);
+  await expect(manual.getByRole('textbox', { name: '새 그룹 이름' })).toBeVisible();
+  await expect(automatic.getByRole('textbox', { name: '새 그룹 이름' })).toHaveCount(0);
   const shared = groupRow(page, 'Inspector · build-host');
   await expect(shared.locator('.group-count')).toHaveText('2');
   await expect(shared.getByRole('img', { name: 'Claude · Codex' })).toBeVisible();
@@ -745,7 +751,12 @@ test('Groups is one sorted list with actual single and half mixed Agent icons', 
   await expect(shared.locator('.codex-half')).toHaveCSS('clip-path', 'inset(0px 0px 0px 50%)');
   await expect(groupRow(page, 'SessionManager').getByRole('img', { name: 'codex', exact: true })).toBeVisible();
   await expect(groupRow(page, 'Empty group').locator('.group-count')).toHaveText('0');
-  await page.screenshot({ path: '../verification/desktop-groups-unified.png' });
+  await page.screenshot({ path: '../verification/desktop-my-groups.png' });
+  await manual.getByRole('textbox', { name: '새 그룹 이름' }).fill('New user group');
+  await manual.getByRole('button', { name: '그룹 만들기' }).click();
+  await expect(manual.locator('.group-name')).toHaveText(['Empty group', 'New user group', 'Zebra group']);
+  await expect(automatic.locator('.group-name')).toHaveText(['Inspector · build-host', 'SessionManager']);
+  await expect(page.locator('aside .sidebar-label')).toHaveText(['WORKSPACE', 'My Groups 3', 'Groups 2']);
 });
 
 test('session assignment creates a group in the dialog, persists after reload and unassigns', async ({ page }) => {

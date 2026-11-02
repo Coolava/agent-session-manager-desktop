@@ -3,6 +3,7 @@
 - 날짜: 2026-11-02 (Asia/Seoul)
 - 스킬: software-change-workflow
 - 상태: 2026-11-02 전체 계획 승인 후 Step 1~3 구현·검증 완료. 최종 결과는 HANDOFF.md 참조.
+- 후속 표시 요청 적용: 사용자 지정 그룹은 WORKSPACE 아래 My Groups에 별도 표시한다. 아래 목록/단계는 최초 승인 계획 이력이며 최신 표시 기준은 HANDOFF의 후속 수정과 SPEC R-021을 따른다.
 - 위험: High. Desktop 전용 저장 형식과 bridge 응답, 분류 및 UI를 함께 확장한다.
 - 체크포인트: 각 Step 검증 후 그 Step 파일만 커밋한다. 기존 미추적 backup은 제외한다.
 

@@ -254,21 +254,28 @@
           <span>{name}</span><small>{id === 'all' ? sessions.length : sessions.filter(s => s.provider === id).length}</small>
         </button>
       {/each}
-      <div class="sidebar-label spaced">Groups <span>{groupResolution.views.length}</span></div>
-      <div class="groups-list">
-        {#each groupResolution.views as group (group.id)}
-          <button class="nav-row group-row" class:active={scope === group.id} data-group-id={group.id} data-group-kind={group.automatic ? 'automatic' : 'user'}
-            title={`${group.name} · ${group.hint}`} on:click={() => chooseGroup(group)}
-            on:contextmenu={event => showSessionMenu(event, { kind: 'group', source: group.source })}
-            on:keydown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) void showSessionMenu(event, { kind: 'group', source: group.source }); }} aria-haspopup="menu">
-            <DesktopGroupIcon providers={group.providers} /><span><span class="group-name">{group.name}</span>{#if groupResolution.views.some(other => other.id !== group.id && other.name === group.name)}<small class="project-root-hint">{group.hint}</small>{/if}</span><small class="group-count">{group.keys.size}</small>
-          </button>
-        {/each}
-      </div>
-      <form class="new-group" on:submit|preventDefault={() => groupAction('create-group', { name: groupName })}>
-        <input aria-label="새 그룹 이름" bind:value={groupName} maxlength="100" placeholder="새 그룹 이름" disabled={!!groupError} />
-        <button aria-label="그룹 만들기" disabled={!groupName.trim() || groupBusy || !!groupError}>＋</button>
-      </form>
+      {#each [{ name: 'My Groups', automatic: false }, { name: 'Groups', automatic: true }] as section (section.name)}
+        {@const sectionGroups = groupResolution.views.filter(group => group.automatic === section.automatic)}
+        <section aria-label={section.name}>
+          <div class="sidebar-label spaced">{section.name} <span>{sectionGroups.length}</span></div>
+          <div class="groups-list">
+            {#each sectionGroups as group (group.id)}
+              <button class="nav-row group-row" class:active={scope === group.id} data-group-id={group.id} data-group-kind={group.automatic ? 'automatic' : 'user'}
+                title={`${group.name} · ${group.hint}`} on:click={() => chooseGroup(group)}
+                on:contextmenu={event => showSessionMenu(event, { kind: 'group', source: group.source })}
+                on:keydown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) void showSessionMenu(event, { kind: 'group', source: group.source }); }} aria-haspopup="menu">
+                <DesktopGroupIcon providers={group.providers} /><span><span class="group-name">{group.name}</span>{#if groupResolution.views.some(other => other.id !== group.id && other.name === group.name)}<small class="project-root-hint">{group.hint}</small>{/if}</span><small class="group-count">{group.keys.size}</small>
+              </button>
+            {/each}
+          </div>
+          {#if !section.automatic}
+            <form class="new-group" on:submit|preventDefault={() => groupAction('create-group', { name: groupName })}>
+              <input aria-label="새 그룹 이름" bind:value={groupName} maxlength="100" placeholder="새 그룹 이름" disabled={!!groupError} />
+              <button aria-label="그룹 만들기" disabled={!groupName.trim() || groupBusy || !!groupError}>＋</button>
+            </form>
+          {/if}
+        </section>
+      {/each}
       <div class="sidebar-footer"><span class="connection-dot"></span> Local desktop connections</div>
     </aside>
 
