@@ -937,3 +937,24 @@ test('a group read failure or vanished user group disables the open assignment d
   await expect(dialog.getByRole('button', { name: '할당 적용' })).toBeDisabled();
   await expect(dialog.getByRole('textbox', { name: '새 그룹 이름' })).toBeDisabled();
 });
+
+test('selected long group names wrap completely above the rename controls in the minimum window', async ({ page }) => {
+  const name = 'AutomaticInspectorGen2'.repeat(4);
+  await setup(page, { groups: [{ id: 'long-name', name, members: [['claude', 'account', 'claude-id']] }] });
+  await page.setViewportSize({ width: 960, height: 640 });
+  await groupRow(page, name).click();
+  const heading = page.getByRole('heading', { name, exact: true });
+  await expect(heading).toBeVisible();
+  const dimensions = await heading.evaluate(element => ({ height: element.clientHeight, lineHeight: parseFloat(getComputedStyle(element).lineHeight), width: element.clientWidth, contentWidth: element.scrollWidth }));
+  expect(dimensions.height).toBeGreaterThan(dimensions.lineHeight);
+  expect(dimensions.contentWidth).toBeLessThanOrEqual(dimensions.width);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(960);
+  await expect(page.getByRole('textbox', { name: '그룹 이름 변경' })).toHaveValue(name);
+  await expect(page.getByRole('button', { name: '이름 변경', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '그룹 삭제', exact: true })).toBeVisible();
+  await page.screenshot({ path: '../verification/desktop-group-long-name.png' });
+  await page.getByRole('textbox', { name: '그룹 이름 변경' }).fill('Renamed group');
+  await page.getByRole('button', { name: '이름 변경', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Renamed group', exact: true })).toBeVisible();
+  await expect(page.locator('.session-row')).toHaveCount(1);
+});
