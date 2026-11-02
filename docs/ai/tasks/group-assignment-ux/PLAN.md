@@ -2,7 +2,7 @@
 
 - 날짜: 2026-11-02 (Asia/Seoul)
 - 스킬: software-change-workflow
-- 상태: 2026-11-02 사용자가 전체 계획의 구현·검증을 승인했다. Step 1 완료, Step 2 진행.
+- 상태: 2026-11-02 사용자가 전체 계획의 구현·검증을 승인했다. Step 1/2 완료, Step 3 진행.
 - 위험: High. Desktop 전용 저장 형식과 bridge 응답, 분류 및 UI를 함께 확장한다.
 - 체크포인트: 각 Step 검증 후 그 Step 파일만 커밋한다. 기존 미추적 backup은 제외한다.
 

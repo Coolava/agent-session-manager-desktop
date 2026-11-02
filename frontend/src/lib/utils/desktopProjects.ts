@@ -10,7 +10,7 @@ export function isComputerWorkspace(session: Session) {
     && /(?:^|[\\/])scratch-workspaces[\\/][^\\/]+[\\/][^\\/]+[\\/]scratch-[^\\/]+[\\/]?$/i.test(session.cwd);
 }
 
-function explicitKey(session: Session) {
+export function explicitKey(session: Session) {
   const group = sourceGroup(session);
   if (group) return JSON.stringify(['claude-group', session.member[1], group.id]);
   if (session.provider !== 'codex' || session.projectless) return '';
@@ -26,7 +26,7 @@ export function classificationSession(session: Session, tree: { byKey: Map<strin
   return node.session;
 }
 
-function rootKey(session: Session) {
+export function rootKey(session: Session) {
   let path = projectPath(session);
   if (!path) return '';
   if (session.environment === 'local' && /^(?:[a-z]:[\\/]|\\\\|\/\/)/i.test(path)) {

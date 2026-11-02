@@ -3,7 +3,7 @@
 - 날짜: 2026-11-02 (Asia/Seoul)
 - 대상: D:/repos/intellian/Session_Manager_Desktop
 - 스킬: software-change-workflow
-- 단계: 전체 계획 구현·검증 승인 / Step 1 완료, Step 2 진행
+- 단계: 전체 계획 구현·검증 승인 / Step 1/2 완료, Step 3 진행
 
 ## 요청
 
