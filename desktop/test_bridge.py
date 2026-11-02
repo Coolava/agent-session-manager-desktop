@@ -447,6 +447,23 @@ class DesktopBridgeTests(unittest.TestCase):
                 bridge.dispatch({"action": "create-group", "name": "Should not overwrite"}, self.manager())
         self.assertEqual(path.read_text(encoding="utf-8"), "broken groups")
 
+    def test_assignment_actions_resolve_sessions_and_return_persisted_links(self):
+        store = bridge.GroupStore(self.home / "groups.json")
+        group = store.create("User work")
+        with patch.object(bridge, "group_store", return_value=store), patch.object(bridge, "codex_sessions", return_value=([], [])):
+            manager = self.manager()
+            session = bridge.snapshot(manager)["sessions"][0]
+            result = bridge.dispatch({"action": "assign-session", "key": session["key"], "targets": [group.id]}, manager)
+            self.assertEqual(result[0]["members"], (tuple(session["member"]),))
+            source = {"kind": "user", "id": group.id, "name": group.name}
+            parent = store.create("Parent")
+            bridge.dispatch({"action": "assign-group", "source": source, "targets": [parent.id]}, manager)
+            self.assertEqual(bridge.snapshot(manager)["groups"][1]["links"], (source,))
+            before = store.path.read_bytes()
+            with self.assertRaises(ValueError):
+                bridge.dispatch({"action": "assign-session", "key": '["claude","wrong","gone"]', "targets": [group.id]}, manager)
+            self.assertEqual(store.path.read_bytes(), before)
+
 
 if __name__ == "__main__":
     unittest.main()
