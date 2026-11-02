@@ -17,6 +17,8 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/windows"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 //go:embed all:assets
@@ -79,11 +81,28 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	var restoreOnce sync.Once
 	err = wails.Run(&options.App{
 		Title: "Desktop Session Manager", Width: 1380, Height: 880, MinWidth: 960, MinHeight: 640,
 		Frameless: true, BackgroundColour: &options.RGBA{R: 10, G: 10, B: 15, A: 255},
 		AssetServer: &assetserver.Options{Assets: web},
+		StartHidden: true,
+		Windows:     &windows.Options{WindowClassName: windowClassName},
 		OnStartup:   func(ctx context.Context) { app.ctx = ctx }, Bind: []interface{}{app},
+		OnDomReady: func(ctx context.Context) {
+			restoreOnce.Do(func() {
+				if err := restoreDesktopWindow(); err != nil {
+					runtime.LogError(ctx, fmt.Sprintf("창 상태 복원 실패: %v", err))
+				}
+				runtime.WindowShow(ctx)
+			})
+		},
+		OnBeforeClose: func(ctx context.Context) bool {
+			if err := saveDesktopWindow(); err != nil {
+				runtime.LogError(ctx, fmt.Sprintf("창 상태 저장 실패: %v", err))
+			}
+			return false
+		},
 	})
 	if err != nil {
 		panic(err)

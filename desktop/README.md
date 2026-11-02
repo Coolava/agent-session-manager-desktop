@@ -12,6 +12,7 @@ Agent Session Manager Desktop의 Svelte 디자인 토큰과 아이콘을 활용�
 - 결과 메시지는 OS에 열기를 요청했다는 뜻입니다. Desktop 앱의 실제 화면 전환 완료까지 보장하는 응답은 아닙니다.
 - 앱이 선택한 창에 대화를 엽니다. 별도 창 생성, 화면 캡처, UI 자동화, 프롬프트 전송은 사용하지 않습니다.
 - 그룹은 `%APPDATA%/DesktopSessionManager/groups.json`에 보관합니다. 그룹 변경·삭제는 원본 대화를 수정하지 않습니다.
+- 종료 시 창 위치·크기와 최대화 상태를 `%APPDATA%/DesktopSessionManager/window-state.json`에 저장하고 재실행 시 복원합니다. 최소화한 채 종료하면 최소화 직전 일반/최대화 상태로 열립니다. 저장 파일이 없거나 잘못되면 기본 창으로 열며, 화면 밖 위치는 Windows가 보이는 위치로 보정합니다.
 
 그룹 파일은 기존 version 1을 읽고 첫 편집부터 version 2로 원자 저장합니다. version 2는 기존 `id/name/members`와 그룹별 `links`를 보관합니다. 연결은 `kind/name`과 사용자 그룹 `id`, 또는 자동 그룹의 안정 식별자 `selectors`(`key`, 선택 `root`)로 저장합니다. 이름 변경은 연결의 동일성을 바꾸지 않습니다. 구버전 Desktop 실행 파일은 version 2를 읽지 못할 수 있습니다. 공용 Python/Tk의 그룹 파일 형식은 변경하지 않습니다.
 
@@ -53,10 +54,13 @@ npx playwright test --config playwright.desktop.config.mjs
 cd ../desktop
 go test ./...
 go vet ./...
+go test -tags integration -run '^TestWindowStateLifecycle$' -v -count=1
 ```
 
 빌드 스크립트는 PATH의 Go를 사용하며, 로컬 `.tools/go/bin/go.exe`가 있으면 우선 사용합니다. 기존과 같은 Wails 2.14와 Svelte를 사용합니다. Desktop 전용 진입점에는 터미널 및 음성 입력 패키지를 연결하지 않아 tmux/psmux, PortAudio, MSYS2가 필요하지 않습니다.
 
 `go test -tags integration -run TestLiveDesktopBridge -v`는 실제 메타데이터를 읽습니다. `DESKTOP_SESSION_SMOKE_THREAD` 또는 `DESKTOP_SESSION_SMOKE_CLAUDE`에 실제 ID를 지정한 경우에만 해당 대화 열기 링크도 전달합니다. 일반 테스트는 Desktop 앱을 조작하지 않습니다.
+
+`TestWindowStateLifecycle`는 빌드한 실행 파일을 별도 임시 APPDATA로 여러 번 열고 닫아 창 상태 복원을 검사합니다. 기존 그룹과 창 설정에는 쓰지 않습니다.
 
 원본 앱의 README와 MIT LICENSE를 함께 보존합니다. 원본 터미널 앱은 기존 빌드 경로로 유지되며 Desktop 전용 실행 경로는 이 디렉터리에 분리되어 있습니다.
