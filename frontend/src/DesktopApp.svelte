@@ -322,7 +322,6 @@
       {/each}
       </div>
       <button class="nav-row settings-nav" class:active={showSettings} on:click={() => { showSettings = true; closeSessionMenu(); }}><span class="grid-icon" aria-hidden="true">⚙</span><span>설정</span></button>
-      <div class="sidebar-footer"><span class="connection-dot"></span> Local desktop connections</div>
     </aside>
 
     <main>
@@ -446,12 +445,12 @@
   .sidebar-content { flex:1; min-height:0; overflow-y:auto; }
   .sidebar-label { display:flex; align-items:center; justify-content:space-between; color:#71717a; font-size:10px; letter-spacing:1.3px; font-weight:650; padding:0 12px 12px; } .spaced { margin-top:26px; } .add-group { display:flex; align-items:center; justify-content:center; width:24px; height:24px; padding:0; border:0; border-radius:5px; background:none; color:var(--accent-light); font-size:18px; } .add-group:hover,.add-group:focus-visible { background:rgba(var(--accent-rgb),.12); }
   .nav-row { display:flex; align-items:center; gap:11px; width:100%; padding:11px 12px; text-align:left; border:1px solid transparent; border-radius:8px; background:none; margin-bottom:3px; } .nav-row:hover { background:#ffffff05; } .nav-row.active { background:rgba(var(--accent-rgb),.12); color:var(--accent-lighter); border-color:rgba(var(--accent-rgb),.22); } .nav-row > span:nth-child(2) { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .nav-row small { color:#71717a; font-size:11px; } .grid-icon { width:16px; color:var(--accent-light); font-size:17px; }
-  .new-group { display:flex; margin:8px 8px 0; gap:4px; } .new-group input { width:100%; border:1px solid #ffffff10; border-radius:6px; background:var(--bg-sunken); padding:8px; font-size:11px; } .new-group button { background:rgba(var(--accent-rgb),.12); border:0; border-radius:6px; color:var(--accent-light); padding:0 8px; flex-shrink:0; } summary { cursor:pointer; } .sidebar-footer { margin-top:auto; padding:16px 10px 4px; border-top:1px solid #ffffff0a; color:#71717a; font-size:10px; display:flex; align-items:center; gap:7px; } .connection-dot { width:5px; height:5px; border-radius:50%; background:#34d399; }
+  .new-group { display:flex; margin:8px 8px 0; gap:4px; } .new-group input { width:100%; border:1px solid #ffffff10; border-radius:6px; background:var(--bg-sunken); padding:8px; font-size:11px; } .new-group button { background:rgba(var(--accent-rgb),.12); border:0; border-radius:6px; color:var(--accent-light); padding:0 8px; flex-shrink:0; } summary { cursor:pointer; }
   .selected-group-name { margin:0 0 14px; font-size:18px; line-height:1.5; overflow-wrap:anywhere; }
   .group-tools { display:flex; gap:8px; margin-bottom:18px; } .group-tools input { flex:1; min-width:0; background:var(--bg-raised); border:1px solid #ffffff18; padding:8px 12px; border-radius:7px; } .group-tools button,.warning button { background:#ffffff06; border:1px solid #ffffff18; padding:8px 12px; border-radius:7px; } .warning button { margin:8px 0 0 8px; }
   main { flex:1; min-width:0; overflow-y:auto; padding:32px 34px 16px; } input[type=checkbox] { accent-color:var(--accent); }
   .refresh-indicator { display:flex; align-items:center; justify-content:center; width:18px; flex-shrink:0; } .refresh-led { width:9px; height:9px; border-radius:50%; background:#34d399; box-shadow:0 0 7px #34d39966; } .refresh-led.failed { background:#ef4444; box-shadow:0 0 7px #ef444466; }
-  .settings-nav { margin-top:12px; flex-shrink:0; } .settings-nav + .sidebar-footer { margin-top:12px; flex-shrink:0; }
+  .settings-nav { margin-top:12px; flex-shrink:0; }
   .settings-panel { max-width:720px; } .settings-panel h2 { margin:0; font-size:22px; } .settings-description { color:#a1a1aa; margin:10px 0 24px; font-size:12px; }
   .settings-card { padding:24px; border:1px solid #ffffff12; border-radius:12px; background:rgba(var(--bg-base-rgb),.42); } .settings-card h3 { margin:0 0 8px; font-size:14px; }
   .settings-row { display:flex; align-items:center; justify-content:space-between; gap:24px; padding:20px 0; border-bottom:1px solid #ffffff0a; } .settings-row small { display:block; margin-top:7px; font-size:11px; color:#a1a1aa; } .settings-row input[type=checkbox] { width:18px; height:18px; flex-shrink:0; cursor:pointer; }
